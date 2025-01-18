@@ -1,134 +1,279 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { Plugin, TFile } from 'obsidian';
+import { SupabaseService } from './services/SupabaseService';
+import { OpenAIService } from './services/OpenAIService';
+import { QueueService } from './services/QueueService';
+import { MindMatrixSettingsTab } from './settings/SettingsTab';
+import {
+    MindMatrixSettings,
+    DEFAULT_SETTINGS,
+    isVaultInitialized,
+    generateVaultId
+} from './settings/Settings';
 
-// Remember to rename these classes and interfaces!
+export default class MindMatrixPlugin extends Plugin {
+    settings: MindMatrixSettings;
+    supabaseService: SupabaseService | null = null;
+    openAIService: OpenAIService | null = null;
+    queueService: QueueService | null = null;
 
-interface MyPluginSettings {
-	mySetting: string;
-}
+    private isInitializing = false;
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+    async onload() {
+        // Load settings
+        await this.loadSettings();
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+        // Initialize vault if needed
+        await this.initializeVaultIfNeeded();
 
-	async onload() {
-		await this.loadSettings();
+        // Add settings tab
+        this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+        // Initialize services if vault is ready
+        if (isVaultInitialized(this.settings)) {
+            await this.initializeServices();
+        }
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+        // Register event handlers
+        this.registerEventHandlers();
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+        // Add commands
+        this.addCommands();
+    }
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
+    async onunload() {
+        // Cleanup
+        this.queueService?.stop();
+    }
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+    private async loadSettings() {
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    }
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
+    async saveSettings() {
+        await this.saveData(this.settings);
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
+        // Reinitialize services if settings have changed
+        if (isVaultInitialized(this.settings)) {
+            await this.initializeServices();
+        }
+    }
 
-	onunload() {
+    private async initializeVaultIfNeeded() {
+        if (this.isInitializing) return;
+        this.isInitializing = true;
 
-	}
+        try {
+            if (!isVaultInitialized(this.settings)) {
+                // Generate new vault ID
+                this.settings.vaultId = generateVaultId();
+                this.settings.lastKnownVaultName = this.app.vault.getName();
+                await this.saveSettings();
+            } else if (this.settings.lastKnownVaultName !== this.app.vault.getName()) {
+                // Vault name has changed, update it
+                this.settings.lastKnownVaultName = this.app.vault.getName();
+                await this.saveSettings();
+            }
+        } finally {
+            this.isInitializing = false;
+        }
+    }
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
+    private async initializeServices() {
+        try {
+            // Initialize Supabase service
+            this.supabaseService = await SupabaseService.getInstance(this.settings);
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
+            // Initialize OpenAI service
+            this.openAIService = new OpenAIService(this.settings.openai.apiKey);
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+            // Initialize queue service
+            this.queueService = new QueueService(
+                this.settings.queue.maxConcurrent,
+                this.settings.queue.retryAttempts,
+                this.supabaseService,
+                this.openAIService
+            );
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+            // Start queue processing
+            this.queueService.start();
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
+        } catch (error) {
+            console.error('Failed to initialize services:', error);
+            throw error;
+        }
+    }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+    private registerEventHandlers() {
+        // File created
+        this.registerEvent(
+            this.app.vault.on('create', async (file) => {
+                if (!(file instanceof TFile)) return;
+                if (!this.shouldProcessFile(file)) return;
+                await this.queueFileProcessing(file, 'CREATE');
+            })
+        );
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+        // File modified
+        this.registerEvent(
+            this.app.vault.on('modify', async (file) => {
+                if (!(file instanceof TFile)) return;
+                if (!this.shouldProcessFile(file)) return;
+                await this.queueFileProcessing(file, 'UPDATE');
+            })
+        );
 
-	display(): void {
-		const {containerEl} = this;
+        // File deleted
+        this.registerEvent(
+            this.app.vault.on('delete', async (file) => {
+                if (!(file instanceof TFile)) return;
+                if (!this.shouldProcessFile(file)) return;
+                await this.queueFileProcessing(file, 'DELETE');
+            })
+        );
 
-		containerEl.empty();
+        // File renamed
+        this.registerEvent(
+            this.app.vault.on('rename', async (file, oldPath) => {
+                if (!(file instanceof TFile)) return;
+                if (!this.shouldProcessFile(file)) return;
+                await this.handleFileRename(file, oldPath);
+            })
+        );
+    }
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+    private shouldProcessFile(file: TFile): boolean {
+        // Check if services are initialized
+        if (!this.queueService || !isVaultInitialized(this.settings)) {
+            return false;
+        }
+
+        // Check if auto-sync is enabled
+        if (!this.settings.enableAutoSync) {
+            return false;
+        }
+
+        // Check exclusions
+        const filePath = file.path;
+
+        // Check excluded folders
+        const isExcludedFolder = this.settings.exclusions.excludedFolders.some(
+            folder => filePath.startsWith(folder)
+        );
+        if (isExcludedFolder) return false;
+
+        // Check excluded file types
+        const isExcludedType = this.settings.exclusions.excludedFileTypes.some(
+            ext => filePath.endsWith(ext)
+        );
+        if (isExcludedType) return false;
+
+        // Check excluded prefixes
+        const fileName = file.name;
+        const isExcludedPrefix = this.settings.exclusions.excludedFilePrefixes.some(
+            prefix => fileName.startsWith(prefix)
+        );
+        if (isExcludedPrefix) return false;
+
+        return true;
+    }
+
+    private async queueFileProcessing(file: TFile, type: 'CREATE' | 'UPDATE' | 'DELETE') {
+        try {
+            if (!this.queueService) return;
+
+            await this.queueService.addTask({
+                id: file.path,
+                type: type,
+                file: file,
+                priority: type === 'DELETE' ? 2 : 1
+            });
+
+            if (this.settings.enableNotifications) {
+                const action = type.toLowerCase();
+                new Notice(`Queued ${action} for processing: ${file.name}`);
+            }
+        } catch (error) {
+            console.error(`Failed to queue ${type} for ${file.path}:`, error);
+            if (this.settings.enableNotifications) {
+                new Notice(`Failed to queue ${file.name} for processing`);
+            }
+        }
+    }
+
+    private async handleFileRename(file: TFile, oldPath: string) {
+        try {
+            if (!this.supabaseService) return;
+
+            // Update the file path in existing chunks
+            const chunks = await this.supabaseService.getDocumentChunks(oldPath);
+            if (chunks.length > 0) {
+                // Update metadata with new path
+                const updatedChunks = chunks.map(chunk => ({
+                    ...chunk,
+                    metadata: {
+                        ...chunk.metadata,
+                        obsidianId: file.path,
+                        path: file.path
+                    }
+                }));
+
+                // Delete old chunks and insert updated ones
+                await this.supabaseService.deleteDocumentChunks(oldPath);
+                await this.supabaseService.upsertChunks(updatedChunks);
+
+                if (this.settings.enableNotifications) {
+                    new Notice(`Updated database entries for renamed file: ${file.name}`);
+                }
+            }
+        } catch (error) {
+            console.error(`Failed to handle rename for ${file.path}:`, error);
+            if (this.settings.enableNotifications) {
+                new Notice(`Failed to update database for renamed file: ${file.name}`);
+            }
+        }
+    }
+
+    private addCommands() {
+        // Force sync current file
+        this.addCommand({
+            id: 'force-sync-current-file',
+            name: 'Force sync current file',
+            checkCallback: (checking: boolean) => {
+                const file = this.app.workspace.getActiveFile();
+                if (file) {
+                    if (!checking) {
+                        this.queueFileProcessing(file, 'UPDATE');
+                    }
+                    return true;
+                }
+                return false;
+            }
+        });
+
+        // Force sync all files
+        this.addCommand({
+            id: 'force-sync-all-files',
+            name: 'Force sync all files',
+            callback: async () => {
+                const files = this.app.vault.getMarkdownFiles();
+                for (const file of files) {
+                    if (this.shouldProcessFile(file)) {
+                        await this.queueFileProcessing(file, 'UPDATE');
+                    }
+                }
+            }
+        });
+
+        // Clear queue
+        this.addCommand({
+            id: 'clear-sync-queue',
+            name: 'Clear sync queue',
+            callback: () => {
+                this.queueService?.clear();
+                if (this.settings.enableNotifications) {
+                    new Notice('Sync queue cleared');
+                }
+            }
+        });
+    }
 }

@@ -1,7 +1,5 @@
 # Project Prompt
 
-
-```markdown
 I am working on an Obsidian plugin called "mind-matrix" that syncs documents with a Supabase vector database for AI-powered search. To continue helping effectively, please share the current state of your files.
 
 1. Base setup is from the Obsidian sample plugin template with following files:
@@ -21,19 +19,20 @@ I am working on an Obsidian plugin called "mind-matrix" that syncs documents wit
 ```sql
 CREATE TABLE obsidian_notes (
     id BIGSERIAL PRIMARY KEY,
+    vault_id TEXT NOT NULL,
     obsidian_id TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     content TEXT,
     metadata JSONB,
     embedding VECTOR(1536),
     last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(obsidian_id, chunk_index)
+    UNIQUE(vault_id, obsidian_id, chunk_index)
 );
 
 -- Create index for faster lookups
-CREATE INDEX idx_obsidian_id ON obsidian_notes(obsidian_id);
+CREATE INDEX idx_vault_obsidian ON obsidian_notes(vault_id, obsidian_id);
 
-CREATE FUNCTION match_documents(query_embedding VECTOR(1536), match_count INT)
+CREATE FUNCTION match_documents(query_embedding VECTOR(1536), vault_id TEXT, match_count INT)
 RETURNS TABLE (
     id BIGINT,
     obsidian_id TEXT,
@@ -50,6 +49,7 @@ BEGIN
         metadata,
         1 - (obsidian_notes.embedding <=> query_embedding) AS similarity
     FROM obsidian_notes
+    WHERE vault_id = vault_id
     ORDER BY obsidian_notes.embedding <=> query_embedding
     LIMIT match_count;
 END;
@@ -99,18 +99,71 @@ mind-matrix/
      * Maintain chunk ordering with chunk_index
      * Clean up orphaned database entries
 
-6. Implemented Models:
-   - DocumentChunk.ts:
-     * DocumentMetadata interface
-     * DocumentChunk interface
-     * ChunkingOptions interface
-     * EmbeddingResponse interface
-   - ProcessingTask.ts:
-     * TaskType enum
-     * TaskStatus enum
-     * ProcessingTask interface
-     * TaskProgress interface
-     * QueueStats interface
+6. Implemented Files and Components:
+
+A. Models (Completed):
+- DocumentChunk.ts:
+  * DocumentMetadata interface
+  * DocumentChunk interface
+  * ChunkingOptions interface
+  * EmbeddingResponse interface
+- ProcessingTask.ts:
+  * TaskType enum
+  * TaskStatus enum
+  * ProcessingTask interface
+  * TaskProgress interface
+  * QueueStats interface
+
+B. Settings (Completed):
+- Settings.ts:
+```typescript
+export interface MindMatrixSettings {
+    // Vault identification
+    vaultId: string | null;
+    lastKnownVaultName: string;
+
+    // API Configuration
+    supabase: SupabaseSettings;
+    openai: OpenAISettings;
+
+    // Processing settings
+    chunking: ChunkSettings;
+    queue: QueueSettings;
+
+    // Exclusion patterns
+    exclusions: ExclusionSettings;
+
+    // Debug settings
+    debug: DebugSettings;
+
+    // Feature flags
+    enableAutoSync: boolean;
+    enableNotifications: boolean;
+    enableProgressBar: boolean;
+}
+```
+
+C. Services (Partially Completed):
+- SupabaseService.ts (Complete)
+  * Vault-aware database operations
+  * Safe initialization
+  * Error handling
+- main.ts (Complete)
+  * Plugin initialization
+  * Event handling
+  * Settings management
+  * Service orchestration
+
+D. Still To Implement:
+- OpenAIService.ts
+- QueueService.ts
+- Utils folder:
+  * TextSplitter.ts
+  * NotificationManager.ts
+  * ErrorHandler.ts
+  * FileTracker.ts
+- Tests
+- Documentation
 
 7. Package Management & Configuration:
    - Using Yarn Berry (4.6.0)
@@ -183,4 +236,4 @@ mind-matrix/
 
 This will help ensure we continue from the right point and maintain consistency in the implementation.
 Please help continue the implementation of this plugin, following the established structure and goals.
-```
+
