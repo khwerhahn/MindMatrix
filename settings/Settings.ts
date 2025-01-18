@@ -2,54 +2,54 @@
  * Configuration options for chunking text
  */
 export interface ChunkSettings {
-    chunkSize: number;
-    chunkOverlap: number;
-    minChunkSize: number;
+    chunkSize: number; // Size of each chunk in characters
+    chunkOverlap: number; // Overlap between chunks
+    minChunkSize: number; // Minimum size of a chunk
 }
 
 /**
  * Configuration for excluded paths
  */
 export interface ExclusionSettings {
-    excludedFolders: string[];
-    excludedFileTypes: string[];
-    excludedFilePrefixes: string[];
+    excludedFolders: string[]; // Folders to exclude from processing
+    excludedFileTypes: string[]; // File extensions to exclude
+    excludedFilePrefixes: string[]; // File name prefixes to exclude
 }
 
 /**
  * OpenAI API settings
  */
 export interface OpenAISettings {
-    apiKey: string;
-    model: string;
-    maxTokens: number;
-    temperature: number;
+    apiKey: string; // API key for OpenAI
+    model: string; // Model to use for OpenAI operations
+    maxTokens: number; // Maximum tokens for a single request
+    temperature: number; // Sampling temperature for generation
 }
 
 /**
  * Supabase connection settings
  */
 export interface SupabaseSettings {
-    url: string;
-    apiKey: string;
+    url: string; // Supabase project URL
+    apiKey: string; // Supabase API key
 }
 
 /**
  * Processing queue settings
  */
 export interface QueueSettings {
-    maxConcurrent: number;
-    retryAttempts: number;
-    retryDelay: number;
+    maxConcurrent: number; // Maximum concurrent tasks
+    retryAttempts: number; // Number of retry attempts
+    retryDelay: number; // Delay between retries in milliseconds
 }
 
 /**
  * Debug and logging settings
  */
 export interface DebugSettings {
-    enableDebugLogs: boolean;
-    logLevel: 'error' | 'warn' | 'info' | 'debug';
-    logToFile: boolean;
+    enableDebugLogs: boolean; // Enable detailed debug logs
+    logLevel: 'error' | 'warn' | 'info' | 'debug'; // Logging level
+    logToFile: boolean; // Whether to log to a file
 }
 
 /**
@@ -57,27 +57,27 @@ export interface DebugSettings {
  */
 export interface MindMatrixSettings {
     // Vault identification
-    vaultId: string | null;  // null if not yet initialized
-    lastKnownVaultName: string;  // for display purposes
+    vaultId: string | null; // Unique identifier for the vault
+    lastKnownVaultName: string; // Last known name of the vault
 
     // API Configuration
-    supabase: SupabaseSettings;
-    openai: OpenAISettings;
+    supabase: SupabaseSettings; // Supabase configuration
+    openai: OpenAISettings; // OpenAI configuration
 
     // Processing settings
-    chunking: ChunkSettings;
-    queue: QueueSettings;
+    chunking: ChunkSettings; // Text chunking settings
+    queue: QueueSettings; // Queue processing settings
 
     // Exclusion patterns
-    exclusions: ExclusionSettings;
+    exclusions: ExclusionSettings; // Paths and file types to exclude
 
     // Debug settings
-    debug: DebugSettings;
+    debug: DebugSettings; // Debugging and logging configuration
 
     // Feature flags
-    enableAutoSync: boolean;
-    enableNotifications: boolean;
-    enableProgressBar: boolean;
+    enableAutoSync: boolean; // Enable automatic synchronization
+    enableNotifications: boolean; // Show notifications for actions
+    enableProgressBar: boolean; // Show a progress bar during tasks
 }
 
 /**

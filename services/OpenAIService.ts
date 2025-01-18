@@ -5,7 +5,7 @@ import { ErrorHandler } from '../utils/ErrorHandler';
 import { OpenAISettings } from '../settings/Settings';
 
 export class OpenAIService {
-    private client: OpenAI;
+    private client: OpenAI | null;
     private rateLimitDelay: number = 20; // ms between requests
     private lastRequestTime: number = 0;
     private readonly errorHandler: ErrorHandler;
@@ -13,16 +13,40 @@ export class OpenAIService {
 
     constructor(settings: OpenAISettings, errorHandler: ErrorHandler) {
         this.settings = settings;
+        this.errorHandler = errorHandler;
+
+        if (!settings.apiKey) {
+            console.warn('OpenAI API key is missing. OpenAIService will not be initialized.');
+            this.client = null;
+            return;
+        }
+
         this.client = new OpenAI({
             apiKey: settings.apiKey,
         });
-        this.errorHandler = errorHandler;
+    }
+
+    /**
+     * Check if the service is initialized
+     */
+    public isInitialized(): boolean {
+        return this.client !== null;
     }
 
     /**
      * Creates embeddings for the given text chunks with rate limiting and retries
      */
     async createEmbeddings(chunks: string[]): Promise<EmbeddingResponse[]> {
+        if (!this.client) {
+            console.warn('OpenAIService is not initialized. Cannot create embeddings.');
+            new Notice('OpenAI API key is missing. Please set it in the plugin settings.');
+            return chunks.map(() => ({
+                data: [],
+                usage: { prompt_tokens: 0, total_tokens: 0 },
+                model: this.settings.model,
+            }));
+        }
+
         const embeddings: EmbeddingResponse[] = [];
 
         for (let i = 0; i < chunks.length; i++) {
@@ -109,6 +133,13 @@ export class OpenAIService {
      */
     updateSettings(settings: OpenAISettings): void {
         this.settings = settings;
+
+        if (!settings.apiKey) {
+            console.warn('OpenAI API key is missing. OpenAIService will not be initialized.');
+            this.client = null;
+            return;
+        }
+
         this.client = new OpenAI({
             apiKey: settings.apiKey,
         });

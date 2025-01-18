@@ -14,10 +14,6 @@
 !.yarn/versions
 .pnp.*
 
-# Don't include the compiled main.js file in the repo.
-# They should be uploaded to GitHub releases instead.
-main.js
-
 # Exclude sourcemaps
 *.map
 
@@ -42,3 +38,6 @@ yarn-error.log*
 
 # Test coverage
 coverage/
+
+# Combined code state file
+combined_code_state.txt

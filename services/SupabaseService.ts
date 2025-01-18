@@ -7,8 +7,8 @@ import { Notice } from 'obsidian';
  * Service class for handling all Supabase database operations
  */
 export class SupabaseService {
-    private client: SupabaseClient;
-    private static instance: SupabaseService;
+    private client: SupabaseClient | null;
+    private static instance: SupabaseService | null = null;
     private settings: MindMatrixSettings;
 
     private static readonly CREATE_TABLE_SQL = `
@@ -56,7 +56,9 @@ export class SupabaseService {
 
     private constructor(settings: MindMatrixSettings) {
         if (!settings.supabase.url || !settings.supabase.apiKey) {
-            throw new Error('Supabase configuration is incomplete');
+            console.warn('Supabase configuration is incomplete. Supabase service will not be initialized.');
+            this.client = null;
+            return;
         }
 
         if (!isVaultInitialized(settings)) {
@@ -74,7 +76,12 @@ export class SupabaseService {
     /**
      * Get singleton instance of SupabaseService
      */
-    public static async getInstance(settings: MindMatrixSettings): Promise<SupabaseService> {
+    public static async getInstance(settings: MindMatrixSettings): Promise<SupabaseService | null> {
+        if (!settings.supabase.url || !settings.supabase.apiKey) {
+            console.warn('Supabase configuration is incomplete. Returning null.');
+            return null;
+        }
+
         if (!SupabaseService.instance) {
             SupabaseService.instance = new SupabaseService(settings);
             await SupabaseService.instance.initializeDatabase();
@@ -83,7 +90,6 @@ export class SupabaseService {
             SupabaseService.instance.settings.supabase.apiKey !== settings.supabase.apiKey ||
             SupabaseService.instance.settings.vaultId !== settings.vaultId
         ) {
-            // Reinitialize if settings have changed
             SupabaseService.instance = new SupabaseService(settings);
             await SupabaseService.instance.initializeDatabase();
         }
@@ -91,9 +97,64 @@ export class SupabaseService {
     }
 
     /**
+     * Initialize database schema if it doesn't exist
+     */
+    private async initializeDatabase(): Promise<void> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping database initialization.');
+            return;
+        }
+
+        try {
+            const schemaExists = await this.checkSchemaExists();
+
+            if (schemaExists) {
+                const vaultExists = await this.verifyVaultExists();
+                if (!vaultExists) {
+                    new Notice('First time connecting this vault to the database');
+                }
+                return;
+            }
+
+            const vectorExtensionExists = await this.checkVectorExtension();
+
+            if (!vectorExtensionExists) {
+                throw new Error(
+                    'pgvector extension is not available. Please ensure it is installed on your database.'
+                );
+            }
+
+            new Notice('Initializing database schema...');
+
+            const { error: tableError } = await this.client.rpc('exec_sql', {
+                sql: SupabaseService.CREATE_TABLE_SQL
+            });
+
+            if (tableError) {
+                throw new Error(`Failed to create table: ${tableError.message}`);
+            }
+
+            const { error: functionError } = await this.client.rpc('exec_sql', {
+                sql: SupabaseService.CREATE_FUNCTION_SQL
+            });
+
+            if (functionError) {
+                throw new Error(`Failed to create search function: ${functionError.message}`);
+            }
+
+            new Notice('Database schema initialized successfully');
+        } catch (error) {
+            new Notice(`Database initialization failed: ${error.message}`);
+            throw error;
+        }
+    }
+
+    /**
      * Check if database schema exists
      */
     private async checkSchemaExists(): Promise<boolean> {
+        if (!this.client) return false;
+
         try {
             const { data, error } = await this.client
                 .from('obsidian_notes')
@@ -110,6 +171,8 @@ export class SupabaseService {
      * Check if vector extension is available
      */
     private async checkVectorExtension(): Promise<boolean> {
+        if (!this.client) return false;
+
         try {
             const { data, error } = await this.client
                 .from('pg_extension')
@@ -127,6 +190,8 @@ export class SupabaseService {
      * Verify vault exists in database
      */
     private async verifyVaultExists(): Promise<boolean> {
+        if (!this.client) return false;
+
         try {
             const { data, error } = await this.client
                 .from('obsidian_notes')
@@ -141,66 +206,14 @@ export class SupabaseService {
     }
 
     /**
-     * Initialize database schema if it doesn't exist
-     */
-    private async initializeDatabase(): Promise<void> {
-        try {
-            // First check if schema already exists
-            const schemaExists = await this.checkSchemaExists();
-
-            if (schemaExists) {
-                // Verify vault exists in database
-                const vaultExists = await this.verifyVaultExists();
-                if (!vaultExists) {
-                    new Notice('First time connecting this vault to the database');
-                }
-                return;
-            }
-
-            // Verify vector extension is available
-            const vectorExtensionExists = await this.checkVectorExtension();
-
-            if (!vectorExtensionExists) {
-                throw new Error(
-                    'pgvector extension is not available. Please ensure it is installed on your database.'
-                );
-            }
-
-            // Begin initialization
-            new Notice('Initializing database schema...');
-
-            // Create table and index
-            const { error: tableError } = await this.client.rpc(
-                'exec_sql',
-                { sql: SupabaseService.CREATE_TABLE_SQL }
-            );
-
-            if (tableError) {
-                throw new Error(`Failed to create table: ${tableError.message}`);
-            }
-
-            // Create similarity search function
-            const { error: functionError } = await this.client.rpc(
-                'exec_sql',
-                { sql: SupabaseService.CREATE_FUNCTION_SQL }
-            );
-
-            if (functionError) {
-                throw new Error(`Failed to create search function: ${functionError.message}`);
-            }
-
-            new Notice('Database schema initialized successfully');
-
-        } catch (error) {
-            new Notice(`Database initialization failed: ${error.message}`);
-            throw error;
-        }
-    }
-
-    /**
      * Insert or update document chunks in the database
      */
     public async upsertChunks(chunks: DocumentChunk[]): Promise<void> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping upsertChunks.');
+            return;
+        }
+
         try {
             const { error } = await this.client
                 .from('obsidian_notes')
@@ -229,6 +242,11 @@ export class SupabaseService {
      * Delete document chunks by obsidian_id
      */
     public async deleteDocumentChunks(obsidianId: string): Promise<void> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping deleteDocumentChunks.');
+            return;
+        }
+
         try {
             const { error } = await this.client
                 .from('obsidian_notes')
@@ -249,6 +267,11 @@ export class SupabaseService {
      * Get all chunks for a document
      */
     public async getDocumentChunks(obsidianId: string): Promise<DocumentChunk[]> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping getDocumentChunks.');
+            return [];
+        }
+
         try {
             const { data, error } = await this.client
                 .from('obsidian_notes')
@@ -281,6 +304,11 @@ export class SupabaseService {
         metadata: DocumentMetadata;
         similarity: number;
     }>> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping semanticSearch.');
+            return [];
+        }
+
         try {
             const { data, error } = await this.client
                 .rpc('match_documents', {
@@ -308,6 +336,11 @@ export class SupabaseService {
      * Get all unique document IDs for this vault
      */
     public async getAllDocumentIds(): Promise<string[]> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping getAllDocumentIds.');
+            return [];
+        }
+
         try {
             const { data, error } = await this.client
                 .from('obsidian_notes')
@@ -330,6 +363,11 @@ export class SupabaseService {
      * Clean up orphaned entries for this vault
      */
     public async cleanupOrphanedEntries(activeIds: string[]): Promise<number> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping cleanupOrphanedEntries.');
+            return 0;
+        }
+
         try {
             const { data, error } = await this.client
                 .from('obsidian_notes')
@@ -352,6 +390,11 @@ export class SupabaseService {
      * Test database connection and vault access
      */
     public async testConnection(): Promise<boolean> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping testConnection.');
+            return false;
+        }
+
         try {
             const { data, error } = await this.client
                 .from('obsidian_notes')
@@ -369,6 +412,11 @@ export class SupabaseService {
      * Transfer data from one vault ID to another
      */
     public async transferVaultData(oldVaultId: string, newVaultId: string): Promise<void> {
+        if (!this.client) {
+            console.warn('Supabase client is not initialized. Skipping transferVaultData.');
+            return;
+        }
+
         try {
             const { error } = await this.client.rpc('transfer_vault_data', {
                 old_vault_id: oldVaultId,

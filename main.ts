@@ -1,4 +1,4 @@
-import { Plugin, TFile } from 'obsidian';
+import { Plugin, TFile, Notice } from 'obsidian';
 import { SupabaseService } from './services/SupabaseService';
 import { OpenAIService } from './services/OpenAIService';
 import { QueueService } from './services/QueueService';
@@ -19,7 +19,7 @@ export default class MindMatrixPlugin extends Plugin {
     private isInitializing = false;
 
     async onload() {
-        // Load settings
+        console.log('Loading Mind Matrix Plugin...');
         await this.loadSettings();
 
         // Initialize vault if needed
@@ -29,8 +29,21 @@ export default class MindMatrixPlugin extends Plugin {
         this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
 
         // Initialize services if vault is ready
-        if (isVaultInitialized(this.settings)) {
-            await this.initializeServices();
+        try {
+            if (isVaultInitialized(this.settings)) {
+                await this.initializeServices();
+            }
+
+            if (!this.settings.openai.apiKey) {
+                new Notice('OpenAI API key is missing. AI features are disabled. Configure it in the settings.');
+            }
+
+            if (!this.settings.supabase.url || !this.settings.supabase.apiKey) {
+                new Notice('Supabase configuration is incomplete. Database features are disabled. Configure it in the settings.');
+            }
+        } catch (error) {
+            console.error('Failed to initialize Mind Matrix Plugin:', error);
+            new Notice('Mind Matrix Plugin failed to fully initialize. Check the console for details.');
         }
 
         // Register event handlers
@@ -41,7 +54,7 @@ export default class MindMatrixPlugin extends Plugin {
     }
 
     async onunload() {
-        // Cleanup
+        console.log('Unloading Mind Matrix Plugin...');
         this.queueService?.stop();
     }
 
@@ -64,12 +77,10 @@ export default class MindMatrixPlugin extends Plugin {
 
         try {
             if (!isVaultInitialized(this.settings)) {
-                // Generate new vault ID
                 this.settings.vaultId = generateVaultId();
                 this.settings.lastKnownVaultName = this.app.vault.getName();
                 await this.saveSettings();
             } else if (this.settings.lastKnownVaultName !== this.app.vault.getName()) {
-                // Vault name has changed, update it
                 this.settings.lastKnownVaultName = this.app.vault.getName();
                 await this.saveSettings();
             }
@@ -82,9 +93,16 @@ export default class MindMatrixPlugin extends Plugin {
         try {
             // Initialize Supabase service
             this.supabaseService = await SupabaseService.getInstance(this.settings);
+            if (!this.supabaseService) {
+                console.warn('Supabase service is not initialized due to incomplete configuration.');
+            }
 
             // Initialize OpenAI service
-            this.openAIService = new OpenAIService(this.settings.openai.apiKey);
+            this.openAIService = new OpenAIService(this.settings.openai, this.app);
+
+            if (!this.openAIService.isInitialized()) {
+                console.warn('OpenAI service is not initialized due to missing API key.');
+            }
 
             // Initialize queue service
             this.queueService = new QueueService(
@@ -94,9 +112,7 @@ export default class MindMatrixPlugin extends Plugin {
                 this.openAIService
             );
 
-            // Start queue processing
             this.queueService.start();
-
         } catch (error) {
             console.error('Failed to initialize services:', error);
             throw error;
@@ -104,7 +120,6 @@ export default class MindMatrixPlugin extends Plugin {
     }
 
     private registerEventHandlers() {
-        // File created
         this.registerEvent(
             this.app.vault.on('create', async (file) => {
                 if (!(file instanceof TFile)) return;
@@ -113,7 +128,6 @@ export default class MindMatrixPlugin extends Plugin {
             })
         );
 
-        // File modified
         this.registerEvent(
             this.app.vault.on('modify', async (file) => {
                 if (!(file instanceof TFile)) return;
@@ -122,7 +136,6 @@ export default class MindMatrixPlugin extends Plugin {
             })
         );
 
-        // File deleted
         this.registerEvent(
             this.app.vault.on('delete', async (file) => {
                 if (!(file instanceof TFile)) return;
@@ -131,7 +144,6 @@ export default class MindMatrixPlugin extends Plugin {
             })
         );
 
-        // File renamed
         this.registerEvent(
             this.app.vault.on('rename', async (file, oldPath) => {
                 if (!(file instanceof TFile)) return;
@@ -142,32 +154,26 @@ export default class MindMatrixPlugin extends Plugin {
     }
 
     private shouldProcessFile(file: TFile): boolean {
-        // Check if services are initialized
         if (!this.queueService || !isVaultInitialized(this.settings)) {
             return false;
         }
 
-        // Check if auto-sync is enabled
         if (!this.settings.enableAutoSync) {
             return false;
         }
 
-        // Check exclusions
         const filePath = file.path;
 
-        // Check excluded folders
         const isExcludedFolder = this.settings.exclusions.excludedFolders.some(
             folder => filePath.startsWith(folder)
         );
         if (isExcludedFolder) return false;
 
-        // Check excluded file types
         const isExcludedType = this.settings.exclusions.excludedFileTypes.some(
             ext => filePath.endsWith(ext)
         );
         if (isExcludedType) return false;
 
-        // Check excluded prefixes
         const fileName = file.name;
         const isExcludedPrefix = this.settings.exclusions.excludedFilePrefixes.some(
             prefix => fileName.startsWith(prefix)
@@ -204,10 +210,8 @@ export default class MindMatrixPlugin extends Plugin {
         try {
             if (!this.supabaseService) return;
 
-            // Update the file path in existing chunks
             const chunks = await this.supabaseService.getDocumentChunks(oldPath);
             if (chunks.length > 0) {
-                // Update metadata with new path
                 const updatedChunks = chunks.map(chunk => ({
                     ...chunk,
                     metadata: {
@@ -217,7 +221,6 @@ export default class MindMatrixPlugin extends Plugin {
                     }
                 }));
 
-                // Delete old chunks and insert updated ones
                 await this.supabaseService.deleteDocumentChunks(oldPath);
                 await this.supabaseService.upsertChunks(updatedChunks);
 
@@ -234,7 +237,6 @@ export default class MindMatrixPlugin extends Plugin {
     }
 
     private addCommands() {
-        // Force sync current file
         this.addCommand({
             id: 'force-sync-current-file',
             name: 'Force sync current file',
@@ -250,7 +252,6 @@ export default class MindMatrixPlugin extends Plugin {
             }
         });
 
-        // Force sync all files
         this.addCommand({
             id: 'force-sync-all-files',
             name: 'Force sync all files',
@@ -264,7 +265,6 @@ export default class MindMatrixPlugin extends Plugin {
             }
         });
 
-        // Clear queue
         this.addCommand({
             id: 'clear-sync-queue',
             name: 'Clear sync queue',

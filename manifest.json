@@ -7,5 +7,6 @@
 	"author": "khwhahn",
 	"authorUrl": "https://khw.io",
 	"fundingUrl": "",
-	"isDesktopOnly": false
+	"isDesktopOnly": false,
+	"main": "main.js"
 }
