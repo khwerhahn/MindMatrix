@@ -1,11 +1,11 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
+	"id": "mind-matrix",
+	"name": "Mind Matrix",
+	"version": "0.1",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Sync your notes with a postgres vector database and integrate it with your personal AI assistant.",
+	"author": "khwhahn",
+	"authorUrl": "https://khw.io",
+	"fundingUrl": "",
 	"isDesktopOnly": false
 }
