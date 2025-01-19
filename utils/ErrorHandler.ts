@@ -2,8 +2,7 @@ import { DocumentProcessingError } from '../models/DocumentChunk';
 import { TaskProcessingError } from '../models/ProcessingTask';
 import { DebugSettings } from '../settings/Settings';
 import { Notice } from 'obsidian';
-import { appendFileSync } from 'fs';
-import { join } from 'path';
+import { PostgrestError } from '@supabase/supabase-js';
 
 export interface ErrorContext {
     context: string;
@@ -20,6 +19,12 @@ export interface ErrorLog {
     handled: boolean;
 }
 
+export interface SupabaseError extends Error {
+    code: string;
+    details: string;
+    hint?: string;
+}
+
 export class ErrorHandler {
     private errorLogs: ErrorLog[] = [];
     private readonly maxLogs: number = 100;
@@ -29,7 +34,7 @@ export class ErrorHandler {
     constructor(settings: DebugSettings, vaultPath?: string) {
         this.settings = settings;
         if (settings.logToFile && vaultPath) {
-            this.logFilePath = join(vaultPath, '.obsidian', 'mind-matrix.log');
+            this.logFilePath = `${vaultPath}/.obsidian/mind-matrix.log`;
         }
     }
 
@@ -37,12 +42,10 @@ export class ErrorHandler {
      * Handles errors with context and optional recovery
      */
     handleError(error: any, context: ErrorContext, level: 'error' | 'warn' | 'info' | 'debug' = 'error'): void {
-        // Check if we should log this level
         if (!this.shouldLog(level)) {
             return;
         }
 
-        // Create error log entry
         const errorLog: ErrorLog = {
             timestamp: Date.now(),
             error: this.normalizeError(error),
@@ -67,7 +70,9 @@ export class ErrorHandler {
             console.group(`[${level.toUpperCase()}] ${context.context}`);
             console.error('Error details:', error);
             console.error('Context:', context);
-            console.error('Stack trace:', error.stack);
+            if (error.stack) {
+                console.error('Stack trace:', error.stack);
+            }
             console.groupEnd();
         }
 
@@ -99,6 +104,11 @@ export class ErrorHandler {
             return error;
         }
 
+        // Handle Supabase errors
+        if (this.isSupabaseError(error)) {
+            return new Error(`Database error (${error.code}): ${error.message}${error.hint ? ` - ${error.hint}` : ''}`);
+        }
+
         if (typeof error === 'string') {
             return new Error(error);
         }
@@ -114,14 +124,38 @@ export class ErrorHandler {
     }
 
     /**
+     * Type guard for Supabase errors
+     */
+    private isSupabaseError(error: any): error is PostgrestError {
+        return error && typeof error === 'object' && 'code' in error && 'details' in error;
+    }
+
+    /**
      * Shows appropriate notification based on error type
      */
     private showErrorNotification(error: any): void {
         let message = 'An error occurred';
         let duration = 4000;
 
+        // Handle Supabase specific errors
+        if (this.isSupabaseError(error)) {
+            switch (error.code) {
+                case '42P01':
+                    message = 'Database table not found. Please run setup SQL.';
+                    break;
+                case '42501':
+                    message = 'Insufficient database permissions.';
+                    break;
+                case '23505':
+                    message = 'Duplicate entry found.';
+                    break;
+                default:
+                    message = `Database error: ${error.message}`;
+            }
+            duration = 6000;
+        }
         // Handle Document Processing Errors
-        if (error.type === DocumentProcessingError.CHUNKING_ERROR) {
+        else if (error.type === DocumentProcessingError.CHUNKING_ERROR) {
             message = 'Error splitting document into chunks';
         } else if (error.type === DocumentProcessingError.EMBEDDING_ERROR) {
             message = 'Error generating embeddings';
@@ -131,8 +165,13 @@ export class ErrorHandler {
             message = 'Invalid document metadata';
         } else if (error.type === DocumentProcessingError.FILE_ACCESS_ERROR) {
             message = 'Error accessing file';
+        } else if (error.type === DocumentProcessingError.YAML_PARSE_ERROR) {
+            message = 'Error parsing YAML front matter';
+        } else if (error.type === DocumentProcessingError.VECTOR_EXTENSION_ERROR) {
+            message = 'Vector extension not available';
+        } else if (error.type === DocumentProcessingError.SYNC_ERROR) {
+            message = 'Sync operation failed';
         }
-
         // Handle Task Processing Errors
         else if (error.type === TaskProcessingError.QUEUE_FULL) {
             message = 'Task queue is full';
@@ -172,11 +211,12 @@ export class ErrorHandler {
         };
 
         try {
-            appendFileSync(
-                this.logFilePath,
-                JSON.stringify(logEntry) + '\n',
-                { encoding: 'utf8' }
-            );
+            if (this.app?.vault?.adapter?.append) {
+                this.app.vault.adapter.append(
+                    this.logFilePath,
+                    JSON.stringify(logEntry) + '\n'
+                );
+            }
         } catch (error) {
             console.error('Failed to write to log file:', error);
         }
@@ -187,9 +227,6 @@ export class ErrorHandler {
      */
     updateSettings(settings: DebugSettings): void {
         this.settings = settings;
-        if (settings.logToFile && !this.logFilePath) {
-            this.logFilePath = join('.obsidian', 'mind-matrix.log');
-        }
     }
 
     /**
@@ -204,5 +241,16 @@ export class ErrorHandler {
      */
     clearLogs(): void {
         this.errorLogs = [];
+    }
+
+    /**
+     * Gets error statistics
+     */
+    getErrorStats(): Record<string, number> {
+        return this.errorLogs.reduce((acc, log) => {
+            const errorType = log.error.name || 'Unknown';
+            acc[errorType] = (acc[errorType] || 0) + 1;
+            return acc;
+        }, {} as Record<string, number>);
     }
 }

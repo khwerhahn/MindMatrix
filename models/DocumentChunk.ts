@@ -12,7 +12,11 @@ export interface DocumentMetadata {
     created: number;
     // File size in bytes
     size: number;
-    // Additional custom metadata (tags, frontmatter, etc.)
+    // YAML front matter content
+    frontMatter?: Record<string, any>;
+    // Tags extracted from content or front matter
+    tags?: string[];
+    // Additional custom metadata
     customMetadata?: Record<string, unknown>;
 }
 
@@ -65,6 +69,20 @@ export interface EmbeddingResponse {
 }
 
 /**
+ * Error types specific to document processing
+ */
+export enum DocumentProcessingError {
+    CHUNKING_ERROR = 'CHUNKING_ERROR',
+    EMBEDDING_ERROR = 'EMBEDDING_ERROR',
+    DATABASE_ERROR = 'DATABASE_ERROR',
+    INVALID_METADATA = 'INVALID_METADATA',
+    FILE_ACCESS_ERROR = 'FILE_ACCESS_ERROR',
+    YAML_PARSE_ERROR = 'YAML_PARSE_ERROR',
+    VECTOR_EXTENSION_ERROR = 'VECTOR_EXTENSION_ERROR',
+    SYNC_ERROR = 'SYNC_ERROR'
+}
+
+/**
  * Constants for chunking configuration
  */
 export const DEFAULT_CHUNKING_OPTIONS: ChunkingOptions = {
@@ -76,12 +94,35 @@ export const DEFAULT_CHUNKING_OPTIONS: ChunkingOptions = {
 };
 
 /**
- * Error types specific to document processing
+ * Utility type for database operations
  */
-export enum DocumentProcessingError {
-    CHUNKING_ERROR = 'CHUNKING_ERROR',
-    EMBEDDING_ERROR = 'EMBEDDING_ERROR',
-    DATABASE_ERROR = 'DATABASE_ERROR',
-    INVALID_METADATA = 'INVALID_METADATA',
-    FILE_ACCESS_ERROR = 'FILE_ACCESS_ERROR'
+export interface DatabaseRecord {
+    id: number;
+    vault_id: string;
+    obsidian_id: string;
+    chunk_index: number;
+    content: string;
+    metadata: DocumentMetadata;
+    embedding: number[];
+    last_updated: string;
+}
+
+/**
+ * Type guard to check if an error is a DocumentProcessingError
+ */
+export function isDocumentProcessingError(error: any): error is DocumentProcessingError {
+    return Object.values(DocumentProcessingError).includes(error as DocumentProcessingError);
+}
+
+/**
+ * Validates metadata completeness
+ */
+export function validateMetadata(metadata: DocumentMetadata): boolean {
+    return !!(
+        metadata.obsidianId &&
+        metadata.path &&
+        metadata.lastModified &&
+        metadata.created &&
+        metadata.size
+    );
 }

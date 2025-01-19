@@ -3,56 +3,10 @@ import { DocumentChunk, DocumentMetadata } from '../models/DocumentChunk';
 import { MindMatrixSettings, isVaultInitialized } from '../settings/Settings';
 import { Notice } from 'obsidian';
 
-/**
- * Service class for handling all Supabase database operations
- */
 export class SupabaseService {
     private client: SupabaseClient | null;
     private static instance: SupabaseService | null = null;
     private settings: MindMatrixSettings;
-
-    private static readonly CREATE_TABLE_SQL = `
-        CREATE TABLE IF NOT EXISTS obsidian_notes (
-            id BIGSERIAL PRIMARY KEY,
-            vault_id TEXT NOT NULL,
-            obsidian_id TEXT NOT NULL,
-            chunk_index INTEGER NOT NULL,
-            content TEXT,
-            metadata JSONB,
-            embedding VECTOR(1536),
-            last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(vault_id, obsidian_id, chunk_index)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_vault_obsidian ON obsidian_notes(vault_id, obsidian_id);
-    `;
-
-    private static readonly CREATE_FUNCTION_SQL = `
-        CREATE OR REPLACE FUNCTION match_documents(query_embedding VECTOR(1536), vault_id TEXT, match_count INT)
-        RETURNS TABLE (
-            id BIGINT,
-            obsidian_id TEXT,
-            content TEXT,
-            metadata JSONB,
-            similarity FLOAT
-        )
-        LANGUAGE plpgsql
-        AS $$
-        BEGIN
-            RETURN QUERY
-            SELECT
-                id,
-                obsidian_id,
-                content,
-                metadata,
-                1 - (obsidian_notes.embedding <=> query_embedding) AS similarity
-            FROM obsidian_notes
-            WHERE vault_id = vault_id
-            ORDER BY obsidian_notes.embedding <=> query_embedding
-            LIMIT match_count;
-        END;
-        $$;
-    `;
 
     private constructor(settings: MindMatrixSettings) {
         if (!settings.supabase.url || !settings.supabase.apiKey) {
@@ -66,16 +20,9 @@ export class SupabaseService {
         }
 
         this.settings = settings;
-        this.client = createClient(settings.supabase.url, settings.supabase.apiKey, {
-            auth: {
-                persistSession: false
-            }
-        });
+        this.client = createClient(settings.supabase.url, settings.supabase.apiKey);
     }
 
-    /**
-     * Get singleton instance of SupabaseService
-     */
     public static async getInstance(settings: MindMatrixSettings): Promise<SupabaseService | null> {
         if (!settings.supabase.url || !settings.supabase.apiKey) {
             console.warn('Supabase configuration is incomplete. Returning null.');
@@ -96,9 +43,6 @@ export class SupabaseService {
         return SupabaseService.instance;
     }
 
-    /**
-     * Initialize database schema if it doesn't exist
-     */
     private async initializeDatabase(): Promise<void> {
         if (!this.client) {
             console.warn('Supabase client is not initialized. Skipping database initialization.');
@@ -106,102 +50,33 @@ export class SupabaseService {
         }
 
         try {
-            const schemaExists = await this.checkSchemaExists();
+            new Notice('Checking database connection...');
 
-            if (schemaExists) {
-                const vaultExists = await this.verifyVaultExists();
-                if (!vaultExists) {
-                    new Notice('First time connecting this vault to the database');
-                }
-                return;
+            // Verify we can access the database
+            const { data: testData, error: testError } = await this.client
+                .from('obsidian_notes')
+                .select('id')
+                .limit(1);
+
+            if (testError && !testError.message.includes('does not exist')) {
+                throw new Error(`Database connection failed: ${testError.message}`);
             }
 
-            const vectorExtensionExists = await this.checkVectorExtension();
+            // Initialize the database schema
+            const { error: initError } = await this.client
+                .rpc('init_obsidian_notes');
 
-            if (!vectorExtensionExists) {
-                throw new Error(
-                    'pgvector extension is not available. Please ensure it is installed on your database.'
-                );
+            if (initError) {
+                throw new Error(`Failed to initialize database: ${initError.message}`);
             }
 
-            new Notice('Initializing database schema...');
+            new Notice('Database connection verified');
+            this.settings.supabase.initialized = true;
 
-            const { error: tableError } = await this.client.rpc('exec_sql', {
-                sql: SupabaseService.CREATE_TABLE_SQL
-            });
-
-            if (tableError) {
-                throw new Error(`Failed to create table: ${tableError.message}`);
-            }
-
-            const { error: functionError } = await this.client.rpc('exec_sql', {
-                sql: SupabaseService.CREATE_FUNCTION_SQL
-            });
-
-            if (functionError) {
-                throw new Error(`Failed to create search function: ${functionError.message}`);
-            }
-
-            new Notice('Database schema initialized successfully');
         } catch (error) {
-            new Notice(`Database initialization failed: ${error.message}`);
+            console.error('Database initialization error:', error);
+            new Notice(`Database error: ${error.message}`);
             throw error;
-        }
-    }
-
-    /**
-     * Check if database schema exists
-     */
-    private async checkSchemaExists(): Promise<boolean> {
-        if (!this.client) return false;
-
-        try {
-            const { data, error } = await this.client
-                .from('obsidian_notes')
-                .select('id')
-                .limit(1);
-
-            return !error;
-        } catch (error) {
-            return false;
-        }
-    }
-
-    /**
-     * Check if vector extension is available
-     */
-    private async checkVectorExtension(): Promise<boolean> {
-        if (!this.client) return false;
-
-        try {
-            const { data, error } = await this.client
-                .from('pg_extension')
-                .select('extname')
-                .eq('extname', 'vector')
-                .single();
-
-            return !error && data;
-        } catch (error) {
-            return false;
-        }
-    }
-
-    /**
-     * Verify vault exists in database
-     */
-    private async verifyVaultExists(): Promise<boolean> {
-        if (!this.client) return false;
-
-        try {
-            const { data, error } = await this.client
-                .from('obsidian_notes')
-                .select('id')
-                .eq('vault_id', this.settings.vaultId)
-                .limit(1);
-
-            return !error && data && data.length > 0;
-        } catch (error) {
-            return false;
         }
     }
 
@@ -233,7 +108,7 @@ export class SupabaseService {
                 throw error;
             }
         } catch (error) {
-            new Notice(`Failed to upsert chunks: ${error.message}`);
+            console.error('Failed to upsert chunks:', error);
             throw error;
         }
     }
@@ -258,7 +133,7 @@ export class SupabaseService {
                 throw error;
             }
         } catch (error) {
-            new Notice(`Failed to delete chunks: ${error.message}`);
+            console.error('Failed to delete chunks:', error);
             throw error;
         }
     }
@@ -291,7 +166,7 @@ export class SupabaseService {
                 embedding: row.embedding
             }));
         } catch (error) {
-            new Notice(`Failed to get chunks: ${error.message}`);
+            console.error('Failed to get chunks:', error);
             throw error;
         }
     }
@@ -310,12 +185,11 @@ export class SupabaseService {
         }
 
         try {
-            const { data, error } = await this.client
-                .rpc('match_documents', {
-                    query_embedding: embedding,
-                    vault_id: this.settings.vaultId,
-                    match_count: limit
-                });
+            const { data, error } = await this.client.rpc('match_documents', {
+                query_embedding: embedding,
+                search_vault_id: this.settings.vaultId,
+                match_count: limit
+            });
 
             if (error) {
                 throw error;
@@ -327,13 +201,33 @@ export class SupabaseService {
                 similarity: row.similarity
             }));
         } catch (error) {
-            new Notice(`Failed to perform semantic search: ${error.message}`);
+            console.error('Failed to perform semantic search:', error);
             throw error;
         }
     }
 
     /**
-     * Get all unique document IDs for this vault
+     * Test database connection
+     */
+    public async testConnection(): Promise<boolean> {
+        if (!this.client) {
+            return false;
+        }
+
+        try {
+            const { error } = await this.client
+                .from('obsidian_notes')
+                .select('id')
+                .limit(1);
+
+            return !error;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    /**
+     * Get all document IDs for this vault
      */
     public async getAllDocumentIds(): Promise<string[]> {
         if (!this.client) {
@@ -354,80 +248,7 @@ export class SupabaseService {
 
             return data.map(row => row.obsidian_id);
         } catch (error) {
-            new Notice(`Failed to get document IDs: ${error.message}`);
-            throw error;
-        }
-    }
-
-    /**
-     * Clean up orphaned entries for this vault
-     */
-    public async cleanupOrphanedEntries(activeIds: string[]): Promise<number> {
-        if (!this.client) {
-            console.warn('Supabase client is not initialized. Skipping cleanupOrphanedEntries.');
-            return 0;
-        }
-
-        try {
-            const { data, error } = await this.client
-                .from('obsidian_notes')
-                .delete()
-                .eq('vault_id', this.settings.vaultId)
-                .not('obsidian_id', 'in', `(${activeIds.map(id => `'${id}'`).join(',')})`);
-
-            if (error) {
-                throw error;
-            }
-
-            return data?.length || 0;
-        } catch (error) {
-            new Notice(`Failed to cleanup orphaned entries: ${error.message}`);
-            throw error;
-        }
-    }
-
-    /**
-     * Test database connection and vault access
-     */
-    public async testConnection(): Promise<boolean> {
-        if (!this.client) {
-            console.warn('Supabase client is not initialized. Skipping testConnection.');
-            return false;
-        }
-
-        try {
-            const { data, error } = await this.client
-                .from('obsidian_notes')
-                .select('id')
-                .eq('vault_id', this.settings.vaultId)
-                .limit(1);
-
-            return !error;
-        } catch (error) {
-            return false;
-        }
-    }
-
-    /**
-     * Transfer data from one vault ID to another
-     */
-    public async transferVaultData(oldVaultId: string, newVaultId: string): Promise<void> {
-        if (!this.client) {
-            console.warn('Supabase client is not initialized. Skipping transferVaultData.');
-            return;
-        }
-
-        try {
-            const { error } = await this.client.rpc('transfer_vault_data', {
-                old_vault_id: oldVaultId,
-                new_vault_id: newVaultId
-            });
-
-            if (error) {
-                throw error;
-            }
-        } catch (error) {
-            new Notice(`Failed to transfer vault data: ${error.message}`);
+            console.error('Failed to get document IDs:', error);
             throw error;
         }
     }

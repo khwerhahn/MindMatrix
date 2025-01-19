@@ -1,197 +1,107 @@
 import {
     DocumentChunk,
     DocumentMetadata,
-    DocumentProcessingError
+    DocumentProcessingError,
 } from '../models/DocumentChunk';
-import { ChunkSettings } from '../settings/Settings';
+import { DEFAULT_CHUNKING_OPTIONS } from '../settings/Settings';
 
 export class TextSplitter {
-    private settings: ChunkSettings;
-    private readonly sentenceEndRegex = /[.!?]\s+/g;
-    private readonly paragraphEndRegex = /\n\s*\n/g;
+    private settings: {
+        chunkSize: number;
+        chunkOverlap: number;
+        minChunkSize: number;
+    };
 
-    constructor(settings: ChunkSettings) {
-        this.settings = settings;
-        this.validateSettings(settings);
+    // Regex patterns for splitting
+    private readonly SENTENCE_BOUNDARY = /[.!?]\s+/;
+    private readonly PARAGRAPH_BOUNDARY = /\n\s*\n/;
+    private readonly YAML_FRONT_MATTER = /^---\n([\s\S]*?)\n---/;
+
+    constructor(settings?: { chunkSize: number; chunkOverlap: number; minChunkSize: number }) {
+        // Use provided settings or fallback to defaults
+        this.settings = { ...DEFAULT_CHUNKING_OPTIONS, ...settings };
+        this.validateSettings(this.settings);
+    }
+
+    /**
+     * Validates the chunking settings to ensure correctness
+     */
+    private validateSettings(settings: { chunkSize: number; chunkOverlap: number; minChunkSize: number }) {
+        if (settings.chunkSize <= 0) {
+            throw new Error('Chunk size must be greater than 0.');
+        }
+        if (settings.chunkOverlap >= settings.chunkSize) {
+            throw new Error('Chunk overlap must be less than chunk size.');
+        }
+        if (settings.minChunkSize > settings.chunkSize) {
+            throw new Error('Minimum chunk size must not exceed chunk size.');
+        }
     }
 
     /**
      * Splits a document into chunks based on configured settings
      */
-    splitDocument(content: string, metadata: DocumentMetadata): DocumentChunk[] {
+    public splitDocument(content: string, metadata: DocumentMetadata): DocumentChunk[] {
         try {
             if (!content?.trim()) {
                 return [];
             }
 
-            // First split into paragraphs
-            const paragraphs = content.split(this.paragraphEndRegex);
+            // Extract and remove YAML front matter
+            const frontMatter = this.extractFrontMatter(content);
+            if (frontMatter) {
+                metadata.frontMatter = frontMatter;
+                content = content.replace(this.YAML_FRONT_MATTER, '');
+            }
+
+            // Perform the actual chunking
             const chunks: DocumentChunk[] = [];
-            let currentChunk = '';
-            let currentIndex = 0;
+            const splitContent = content.split(this.PARAGRAPH_BOUNDARY);
 
-            for (const paragraph of paragraphs) {
-                if (this.getByteSize(currentChunk + paragraph) > this.settings.chunkSize) {
-                    // If current chunk is not empty, save it
-                    if (currentChunk) {
-                        chunks.push(this.createChunk(currentChunk, currentIndex, metadata));
-                        currentIndex++;
+            let chunkIndex = 0;
+            for (const paragraph of splitContent) {
+                let position = 0;
+                while (position < paragraph.length) {
+                    const chunk = paragraph.slice(position, position + this.settings.chunkSize);
+                    const adjustedChunk = chunk.trim();
 
-                        // Start new chunk with overlap from previous
-                        const overlapText = this.getOverlapText(currentChunk);
-                        currentChunk = overlapText + paragraph;
-                    } else {
-                        // If paragraph itself is too large, split it into sentences
-                        const sentenceChunks = this.splitIntoSentences(paragraph);
-                        for (const chunk of sentenceChunks) {
-                            chunks.push(this.createChunk(chunk, currentIndex, metadata));
-                            currentIndex++;
-                        }
+                    if (adjustedChunk.length >= this.settings.minChunkSize) {
+                        chunks.push({
+                            content: adjustedChunk,
+                            chunkIndex: chunkIndex++,
+                            metadata,
+                        });
                     }
-                } else {
-                    currentChunk += (currentChunk ? '\n\n' : '') + paragraph;
+
+                    position += this.settings.chunkSize - this.settings.chunkOverlap;
                 }
             }
 
-            // Add final chunk if not empty
-            if (currentChunk) {
-                chunks.push(this.createChunk(currentChunk, currentIndex, metadata));
-            }
-
-            return this.validateChunks(chunks);
-
+            return chunks;
         } catch (error) {
             throw {
                 type: DocumentProcessingError.CHUNKING_ERROR,
-                message: 'Error splitting document into chunks',
-                originalError: error
+                message: 'Error occurred during document chunking',
+                details: error.message,
             };
         }
     }
 
     /**
-     * Splits text into sentences and combines them into chunks
+     * Extracts YAML front matter from the content
      */
-    private splitIntoSentences(text: string): string[] {
-        const sentences = text.split(this.sentenceEndRegex);
-        const chunks: string[] = [];
-        let currentChunk = '';
+    private extractFrontMatter(content: string): Record<string, any> | null {
+        const match = this.YAML_FRONT_MATTER.exec(content);
+        if (!match) return null;
 
-        for (const sentence of sentences) {
-            const combinedSize = this.getByteSize(currentChunk + sentence);
-
-            if (combinedSize > this.settings.chunkSize && currentChunk) {
-                chunks.push(currentChunk.trim());
-                currentChunk = sentence;
-            } else {
-                currentChunk += (currentChunk ? ' ' : '') + sentence;
-            }
-        }
-
-        if (currentChunk) {
-            chunks.push(currentChunk.trim());
-        }
-
-        return chunks;
-    }
-
-    /**
-     * Creates a chunk object with the given content and metadata
-     */
-    private createChunk(content: string, index: number, metadata: DocumentMetadata): DocumentChunk {
-        return {
-            content: content.trim(),
-            chunkIndex: index,
-            metadata: { ...metadata }
-        };
-    }
-
-    /**
-     * Gets overlapping text from the end of a chunk
-     */
-    private getOverlapText(text: string): string {
-        const sentences = text.split(this.sentenceEndRegex);
-        let overlapText = '';
-        let currentSize = 0;
-
-        for (let i = sentences.length - 1; i >= 0; i--) {
-            const sentence = sentences[i];
-            const newSize = this.getByteSize(sentence + overlapText);
-
-            if (newSize > this.settings.chunkOverlap) {
-                break;
-            }
-
-            overlapText = sentence + (overlapText ? ' ' : '') + overlapText;
-            currentSize = newSize;
-        }
-
-        return overlapText;
-    }
-
-    /**
-     * Calculates the byte size of a string
-     */
-    private getByteSize(str: string): number {
-        return new TextEncoder().encode(str).length;
-    }
-
-    /**
-     * Validates chunks meet minimum size requirements
-     */
-    private validateChunks(chunks: DocumentChunk[]): DocumentChunk[] {
-        // Combine chunks smaller than minChunkSize with the next chunk
-        const validatedChunks: DocumentChunk[] = [];
-        let currentChunk: DocumentChunk | null = null;
-
-        for (const chunk of chunks) {
-            if (!currentChunk) {
-                currentChunk = chunk;
-                continue;
-            }
-
-            const chunkSize = this.getByteSize(chunk.content);
-            if (chunkSize < this.settings.minChunkSize) {
-                currentChunk.content += '\n\n' + chunk.content;
-            } else {
-                validatedChunks.push(currentChunk);
-                currentChunk = chunk;
-            }
-        }
-
-        if (currentChunk) {
-            validatedChunks.push(currentChunk);
-        }
-
-        // Reindex chunks
-        return validatedChunks.map((chunk, index) => ({
-            ...chunk,
-            chunkIndex: index
-        }));
-    }
-
-    /**
-     * Updates chunking settings
-     */
-    updateSettings(settings: ChunkSettings): void {
-        this.validateSettings(settings);
-        this.settings = settings;
-    }
-
-    /**
-     * Validates chunking settings
-     */
-    private validateSettings(settings: ChunkSettings): void {
-        if (settings.chunkSize < settings.minChunkSize) {
-            throw new Error('chunkSize must be greater than or equal to minChunkSize');
-        }
-
-        if (settings.chunkOverlap >= settings.chunkSize) {
-            throw new Error('chunkOverlap must be less than chunkSize');
-        }
-
-        if (settings.minChunkSize <= 0) {
-            throw new Error('minChunkSize must be greater than 0');
+        try {
+            return JSON.parse(match[1]);
+        } catch (error) {
+            throw {
+                type: DocumentProcessingError.YAML_PARSE_ERROR,
+                message: 'Failed to parse YAML front matter',
+                details: error.message,
+            };
         }
     }
 }

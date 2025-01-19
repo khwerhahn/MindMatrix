@@ -21,8 +21,10 @@ export class OpenAIService {
             return;
         }
 
+        // Initialize OpenAI client with browser support
         this.client = new OpenAI({
             apiKey: settings.apiKey,
+            dangerouslyAllowBrowser: true, // Enable browser-like environment usage
         });
     }
 
@@ -140,8 +142,10 @@ export class OpenAIService {
             return;
         }
 
+        // Reinitialize the OpenAI client with updated settings
         this.client = new OpenAI({
             apiKey: settings.apiKey,
+            dangerouslyAllowBrowser: true, // Ensure this remains enabled
         });
     }
 
