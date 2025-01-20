@@ -208,4 +208,32 @@ Development Goals
 	2.	Provide robust error recovery and task retries.
 	3.	Offer a seamless user experience with clear feedback mechanisms.
 
-You can now copy and paste this into your `Prompts.md` file. Let me know if you need further adjustments!
+From the last session:
+I'm implementing semantic search for my "mind-matrix" Obsidian plugin that syncs documents with Supabase vector database. In our previous discussion, you analyzed my setup and identified these issues:
+
+1. Query Format: My n8n query was using "Digital Marks" as plain text search, but it should be using embeddings for proper semantic search
+2. Chunks: While content is properly chunked, search needs to properly combine results
+
+You suggested improvements including:
+- Semantic Search: Using embeddings for search queries with the same OpenAI model
+- Result Filtering: Using similarity threshold for relevant results
+- Document Grouping: Grouping by document and returning most relevant chunks
+- Improved Logging: Better diagnostic logging
+
+You explained that for n8n integration, I should:
+1. Use embeddings/OpenAI node first to generate query embedding
+2. Pass that embedding to Supabase search function
+3. Use minimum similarity threshold (0.7)
+
+And the input JSON for Supabase Vector Store node should be:
+{
+  "query_embedding": [<vector from OpenAI>],
+  "search_vault_id": "your_vault_id",
+  "match_count": 5
+}
+
+You provided SQL and TypeScript code for improving the implementation but were about to show me:
+1. The complete n8n workflow setup for proper semantic search
+2. How to implement and test the search functionality directly in the plugin
+
+Could you continue with these two points?
