@@ -101,7 +101,7 @@ mind-matrix/
 │   │   ├── TextSplitter.ts        # Document chunking
 │   │   ├── NotificationManager.ts # Notifications and progress
 │   │   ├── ErrorHandler.ts        # Centralized error handling
-│   │   └── FileTracker.ts         # File event tracking (to be implemented)
+│   │   └── FileTracker.ts         # File event tracking
 │   └── models/
 │       ├── DocumentChunk.ts       # Data structures
 │       └── ProcessingTask.ts      # Task queue interface
@@ -135,6 +135,70 @@ mind-matrix/
 5. **User Feedback**
    - Notifications for sync events and errors.
    - Progress bars for ongoing tasks.
+
+## **Next Implementation Tasks**
+
+### **1. Enhanced Metadata Integration**
+- Update TextSplitter to:
+  - Extract and parse tags array from frontmatter
+  - Extract and parse aliases array
+  - Extract created_at timestamp
+  - Parse **Links** section for internal document links
+  - Create metadata-enriched version of content
+
+- Enhance embedding process:
+  - Prepend metadata before generating embeddings
+  - Format: "Tags: #tag1, #tag2\nAliases: alias1, alias2\nLinks: [[link1]], [[link2]]\nCreated: timestamp\n\n[content]"
+
+- Modify database schema:
+  - Add columns for tags (array)
+  - Add columns for aliases (array)
+  - Add columns for linked_documents (array)
+  - Add created_at and vectorized_at timestamps
+
+### **2. Initial Vault Sync Implementation**
+- Add new settings:
+  - Enable/disable automatic initial sync
+  - Configure batch size
+  - Set priority rules
+
+- Create Initial Sync Manager:
+  - Scan vault for markdown files
+  - Track vectorization status using frontmatter
+  - Compare vectorized_last with last_modified
+  - Implement batch processing
+  - Add progress tracking
+
+- Update file processing:
+  - Manage vectorized_last in frontmatter
+  - Implement delta detection
+  - Handle missing frontmatter cases
+  - Ensure atomic updates
+
+ ### **3. Improved File Exclusion System**
+
+Update exclusion logic to focus on Obsidian-specific patterns:
+
+Handle Obsidian's special directories (.obsidian)
+Focus on markdown and related attachment files
+Implement proper path matching for excluded directories
+Add support for glob patterns in exclusion rules
+
+
+Revise default exclusion settings:
+
+Remove non-Obsidian related patterns (node_modules, .git)
+Add Obsidian-specific patterns
+Consider common attachment directories
+Add patterns for system files (.DS_Store, Thumbs.db)
+
+
+Add exclusion validation:
+
+Validate exclusion patterns at startup
+Provide feedback for invalid patterns
+Add path normalization for cross-platform compatibility
+Implement testing for exclusion rules
 
 ## **Settings and Configuration**
 
@@ -193,59 +257,10 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 - **Debugging**: Logging and verbosity levels.
 - **Notifications**: Progress bars and sync events.
 
-## **Pending Tasks**
-
-1. **File Event Tracking (FileTracker)**:
-   - Implement logic for detecting file moves, renames, and deletions.
-   - Ensure consistency in the database when files are updated.
-
-2. **Error Handling Enhancements**:
-   - Improve error recovery for database connection failures.
-   - Add fallback mechanisms for API rate limits.
-
-3. **Testing**:
-   - Write unit tests for core modules (QueueService, SupabaseService).
-   - Add integration tests for the entire sync pipeline.
-
-4. **Documentation**:
-   - Create user-friendly guides for setup and troubleshooting.
-   - Add developer notes for extending the plugin.
-
 ## **Development Goals**
 
 1. Ensure high performance with large vaults.
 2. Provide robust error recovery and task retries.
 3. Offer a seamless user experience with clear feedback mechanisms.
-
-## **From the last session**
-
-I'm implementing semantic search for my "mind-matrix" Obsidian plugin that syncs documents with Supabase vector database. In our previous discussion, you analyzed my setup and identified these issues:
-
-1. Query Format: My n8n query was using "Digital Marks" as plain text search, but it should be using embeddings for proper semantic search
-2. Chunks: While content is properly chunked, search needs to properly combine results
-
-You suggested improvements including:
-- Semantic Search: Using embeddings for search queries with the same OpenAI model
-- Result Filtering: Using similarity threshold for relevant results
-- Document Grouping: Grouping by document and returning most relevant chunks
-- Improved Logging: Better diagnostic logging
-
-You explained that for n8n integration, I should:
-1. Use embeddings/OpenAI node first to generate query embedding
-2. Pass that embedding to Supabase search function
-3. Use minimum similarity threshold (0.7)
-
-And the input JSON for Supabase Vector Store node should be:
-```json
-{
-  "query_embedding": [<vector from OpenAI>],
-  "search_vault_id": "your_vault_id",
-  "match_count": 5
-}
-```
-
-You provided SQL and TypeScript code for improving the implementation but were about to show me:
-1. The complete n8n workflow setup for proper semantic search
-2. How to implement and test the search functionality directly in the plugin
-
-Could you continue with these two points?
+4. Enhance search accuracy through metadata integration.
+5. Support efficient initial vault synchronization.
