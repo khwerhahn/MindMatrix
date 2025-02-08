@@ -1,1 +1,1 @@
-echo "### Prompts.md ###" > combined_code_state.txt && cat Prompts.md >> combined_code_state.txt && find models/ services/ settings/ utils/ -type f -exec echo "### {} ###" \; -exec cat {} \; >> combined_code_state.txt
+echo "### Prompts.md ###" > combined_code_state.txt && cat Prompts.md | tr '\n' ' ' >> combined_code_state.txt && find models/ services/ settings/ utils/ -type f -exec echo -e "\n### {} ###" \; -exec cat {} | tr '\n' ' ' \; >> combined_code_state.txt
