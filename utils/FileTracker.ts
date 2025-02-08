@@ -1,6 +1,9 @@
+// src/utils/FileTracker.ts
+
 import { TAbstractFile, TFile, Vault } from 'obsidian';
-import { ErrorHandler } from '../utils/ErrorHandler';
+import { ErrorHandler } from './ErrorHandler';
 import { DocumentMetadata } from '../models/DocumentChunk';
+import { SyncFileManager } from '../services/SyncFileManager';
 
 interface FileEvent {
 	type: 'create' | 'modify' | 'delete' | 'rename';
@@ -21,31 +24,84 @@ export class FileTracker {
 	private eventQueue: FileEvent[] = [];
 	private isProcessing: boolean = false;
 	private processingTimeout: number = 1000; // Debounce time in ms
+	private syncManager: SyncFileManager;
 
 	constructor(
 		private vault: Vault,
-		private errorHandler: ErrorHandler
-	) { }
+		private errorHandler: ErrorHandler,
+		syncFilePath: string = '_mindmatrixsync.md'
+	) {
+		this.syncManager = new SyncFileManager(vault, errorHandler, syncFilePath);
+	}
 
 	/**
-	 * Initialize the file tracker with existing files
+	 * Initialize the file tracker and sync manager
 	 */
 	async initialize(): Promise<void> {
-		const files = this.vault.getFiles();
-		for (const file of files) {
-			try {
-				const hash = await this.calculateFileHash(file);
-				this.fileCache.set(file.path, {
-					path: file.path,
-					hash,
-					lastModified: file.stat.mtime
-				});
-			} catch (error) {
-				this.errorHandler.handleError(error, {
-					context: 'FileTracker.initialize',
-					metadata: { filePath: file.path }
-				});
+		try {
+			// Initialize sync manager first
+			await this.syncManager.initialize();
+
+			// Get existing sync entries
+			const syncEntries = await this.syncManager.getAllSyncEntries();
+
+			// Initialize cache from sync entries, excluding sync files
+			for (const entry of syncEntries) {
+				if (this.shouldTrackFile(entry.filePath)) {
+					this.fileCache.set(entry.filePath, {
+						path: entry.filePath,
+						hash: entry.hash,
+						lastModified: entry.lastModified,
+						lastSynced: entry.lastSynced
+					});
+				}
 			}
+
+			// Scan vault for new or modified files
+			const files = this.vault.getFiles();
+			for (const file of files) {
+				try {
+					if (!this.shouldTrackFile(file.path)) {
+						continue;
+					}
+
+					const hash = await this.calculateFileHash(file);
+					const existing = this.fileCache.get(file.path);
+
+					if (!existing || existing.hash !== hash) {
+						this.fileCache.set(file.path, {
+							path: file.path,
+							hash,
+							lastModified: file.stat.mtime
+						});
+
+						// Update sync status for modified files
+						await this.syncManager.updateSyncStatus(file.path, 'PENDING', {
+							lastModified: file.stat.mtime,
+							hash
+						});
+					}
+				} catch (error) {
+					this.errorHandler.handleError(error, {
+						context: 'FileTracker.initialize',
+						metadata: { filePath: file.path }
+					});
+				}
+			}
+
+			// Clean up entries for files that no longer exist
+			const allPaths = new Set(files.map(f => f.path));
+			for (const [path, cache] of this.fileCache.entries()) {
+				if (!allPaths.has(path)) {
+					this.fileCache.delete(path);
+				}
+			}
+
+		} catch (error) {
+			this.errorHandler.handleError(error, {
+				context: 'FileTracker.initialize'
+			});
+			throw error;
 		}
 	}
 
@@ -53,7 +109,9 @@ export class FileTracker {
 	 * Handle file creation events
 	 */
 	async handleCreate(file: TAbstractFile): Promise<void> {
-		if (!(file instanceof TFile)) return;
+		if (!(file instanceof TFile) || !this.shouldTrackFile(file.path)) {
+			return;
+		}
 
 		const event: FileEvent = {
 			type: 'create',
@@ -61,14 +119,16 @@ export class FileTracker {
 			timestamp: Date.now()
 		};
 
-		this.queueEvent(event);
+		await this.queueEvent(event);
 	}
 
 	/**
 	 * Handle file modification events
 	 */
 	async handleModify(file: TAbstractFile): Promise<void> {
-		if (!(file instanceof TFile)) return;
+		if (!(file instanceof TFile) || !this.shouldTrackFile(file.path)) {
+			return;
+		}
 
 		const event: FileEvent = {
 			type: 'modify',
@@ -76,14 +136,16 @@ export class FileTracker {
 			timestamp: Date.now()
 		};
 
-		this.queueEvent(event);
+		await this.queueEvent(event);
 	}
 
 	/**
 	 * Handle file deletion events
 	 */
 	async handleDelete(file: TAbstractFile): Promise<void> {
-		if (!(file instanceof TFile)) return;
+		if (!(file instanceof TFile) || !this.shouldTrackFile(file.path)) {
+			return;
+		}
 
 		const event: FileEvent = {
 			type: 'delete',
@@ -91,15 +153,23 @@ export class FileTracker {
 			timestamp: Date.now()
 		};
 
-		this.queueEvent(event);
+		await this.queueEvent(event);
 		this.fileCache.delete(file.path);
+
+		// Update sync status to reflect deletion
+		await this.syncManager.updateSyncStatus(file.path, 'OK', {
+			lastModified: Date.now(),
+			hash: ''  // Empty hash indicates deletion
+		});
 	}
 
 	/**
 	 * Handle file rename events
 	 */
 	async handleRename(file: TAbstractFile, oldPath: string): Promise<void> {
-		if (!(file instanceof TFile)) return;
+		if (!(file instanceof TFile) || !this.shouldTrackFile(file.path)) {
+			return;
+		}
 
 		const event: FileEvent = {
 			type: 'rename',
@@ -108,23 +178,49 @@ export class FileTracker {
 			timestamp: Date.now()
 		};
 
-		this.queueEvent(event);
+		await this.queueEvent(event);
+
+		// Update cache and sync status for renamed file
 		if (this.fileCache.has(oldPath)) {
 			const cache = this.fileCache.get(oldPath);
 			if (cache) {
 				this.fileCache.delete(oldPath);
+				const newHash = await this.calculateFileHash(file);
 				this.fileCache.set(file.path, {
 					...cache,
-					path: file.path
+					path: file.path,
+					hash: newHash,
+					lastModified: file.stat.mtime
+				});
+
+				// Update sync status for both old and new paths
+				await this.syncManager.updateSyncStatus(oldPath, 'OK', {
+					lastModified: Date.now(),
+					hash: ''  // Empty hash indicates deletion/move
+				});
+
+				await this.syncManager.updateSyncStatus(file.path, 'PENDING', {
+					lastModified: file.stat.mtime,
+					hash: newHash
 				});
 			}
 		}
 	}
 
+	private shouldTrackFile(filePath: string): boolean {
+		// Never track sync files
+		if (filePath === this.syncFilePath ||
+			filePath.endsWith('_mindmatrixsync.md') ||
+			filePath.endsWith('_mindmatrixsync.md.backup')) {
+			return false;
+		}
+		return true;
+	}
+
 	/**
 	 * Queue an event for processing
 	 */
-	private queueEvent(event: FileEvent): void {
+	private async queueEvent(event: FileEvent): Promise<void> {
 		this.eventQueue.push(event);
 
 		if (!this.isProcessing) {
@@ -179,26 +275,36 @@ export class FileTracker {
 		// Get the final state after all events
 		const finalEvent = events[events.length - 1];
 
-		// Calculate new hash for existing files
-		if (finalEvent.type !== 'delete') {
-			const newHash = await this.calculateFileHash(finalEvent.file);
-			const existingCache = this.fileCache.get(path);
+		try {
+			// Calculate new hash for existing files
+			if (finalEvent.type !== 'delete') {
+				const newHash = await this.calculateFileHash(finalEvent.file);
+				const existingCache = this.fileCache.get(path);
 
-			// Check if file actually changed
-			if (existingCache && existingCache.hash === newHash) {
-				return; // No real change
+				// Check if file actually changed
+				if (existingCache && existingCache.hash === newHash) {
+					return; // No real change
+				}
+
+				// Update cache
+				this.fileCache.set(path, {
+					path,
+					hash: newHash,
+					lastModified: finalEvent.file.stat.mtime
+				});
+
+				// Update sync status
+				await this.syncManager.updateSyncStatus(path, 'PENDING', {
+					lastModified: finalEvent.file.stat.mtime,
+					hash: newHash
+				});
 			}
-
-			// Update cache
-			this.fileCache.set(path, {
-				path,
-				hash: newHash,
-				lastModified: finalEvent.file.stat.mtime
+		} catch (error) {
+			this.errorHandler.handleError(error, {
+				context: 'FileTracker.processFileEvents',
+				metadata: { path, eventType: finalEvent.type }
 			});
 		}
-
-		// Emit the appropriate event
-		await this.emitFileChange(finalEvent);
 	}
 
 	/**
@@ -252,8 +358,8 @@ export class FileTracker {
 					}
 				},
 				source: "obsidian",
-				file_id: file.path,  // Using path as file_id since we don't have Google Drive file IDs
-				blobType: "text/markdown"  // More appropriate for Obsidian markdown files
+				file_id: file.path,
+				blobType: "text/markdown"
 			};
 		} catch (error) {
 			this.errorHandler.handleError(error, {
@@ -272,56 +378,7 @@ export class FileTracker {
 	}
 
 	/**
-	 * Extract custom metadata from file (e.g., frontmatter)
-	 */
-	private async extractCustomMetadata(file: TFile): Promise<Record<string, unknown>> {
-		try {
-			const content = await this.vault.read(file);
-			const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-
-			if (frontmatterMatch) {
-				const frontmatter = frontmatterMatch[1];
-				const metadata: Record<string, unknown> = {};
-
-				frontmatter.split('\n').forEach(line => {
-					const [key, ...valueParts] = line.split(':');
-					if (key && valueParts.length > 0) {
-						const value = valueParts.join(':').trim();
-						metadata[key.trim()] = value;
-					}
-				});
-
-				return metadata;
-			}
-
-			return {};
-		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'FileTracker.extractCustomMetadata',
-				metadata: { filePath: file.path }
-			});
-			return {};
-		}
-	}
-
-	/**
-	 * Event emitter for file changes
-	 */
-	private async emitFileChange(event: FileEvent): Promise<void> {
-		// Implementation will depend on how you want to handle these events
-		// This could emit events to the QueueService or directly to the database
-		console.log('File change detected:', event);
-	}
-
-	/**
-	 * Get cached file information
-	 */
-	public getFileCache(path: string): FileCache | undefined {
-		return this.fileCache.get(path);
-	}
-
-	/**
-	 * Clear file cache
+	 * Clear file cache and queue
 	 */
 	public clearCache(): void {
 		this.fileCache.clear();
@@ -333,5 +390,19 @@ export class FileTracker {
 	 */
 	public setProcessingTimeout(timeout: number): void {
 		this.processingTimeout = timeout;
+	}
+
+	/**
+	 * Get sync status for a file
+	 */
+	public async getSyncStatus(path: string) {
+		return await this.syncManager.getSyncStatus(path);
+	}
+
+	/**
+	 * Get all sync statuses
+	 */
+	public async getAllSyncStatuses() {
+		return await this.syncManager.getAllSyncEntries();
 	}
 }

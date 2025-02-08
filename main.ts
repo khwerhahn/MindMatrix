@@ -6,419 +6,688 @@ import { FileTracker } from './utils/FileTracker';
 import { ErrorHandler } from './utils/ErrorHandler';
 import { NotificationManager } from './utils/NotificationManager';
 import { MindMatrixSettingsTab } from './settings/SettingsTab';
+import { SyncFileManager } from './services/SyncFileManager';
+import { InitialSyncManager } from './services/InitialSyncManager';
+import { MetadataExtractor } from './services/MetadataExtractor';
 import {
-    MindMatrixSettings,
-    DEFAULT_SETTINGS,
-    isVaultInitialized,
-    generateVaultId
+	MindMatrixSettings,
+	DEFAULT_SETTINGS,
+	isVaultInitialized,
+	generateVaultId
 } from './settings/Settings';
 
 export default class MindMatrixPlugin extends Plugin {
-    settings: MindMatrixSettings;
-    private supabaseService: SupabaseService | null = null;
-    private openAIService: OpenAIService | null = null;
-    private queueService: QueueService | null = null;
-    private fileTracker: FileTracker | null = null;
-    private errorHandler: ErrorHandler | null = null;
-    private notificationManager: NotificationManager | null = null;
-    private isInitializing = false;
+	settings: MindMatrixSettings;
+	private supabaseService: SupabaseService | null = null;
+	private openAIService: OpenAIService | null = null;
+	private queueService: QueueService | null = null;
+	private fileTracker: FileTracker | null = null;
+	private errorHandler: ErrorHandler | null = null;
+	private notificationManager: NotificationManager | null = null;
+	private isInitializing = false;
+	private syncManager: SyncFileManager | null = null;
+	private syncCheckInterval: NodeJS.Timeout | null = null;
+	private initializationTimeout: NodeJS.Timeout | null = null;
+	private syncCheckAttempts = 0;
+	private initialSyncManager: InitialSyncManager | null = null;
+	private metadataExtractor: MetadataExtractor | null = null;
 
-    async onload() {
-        console.log('Loading Mind Matrix Plugin...');
+	async onload() {
+		console.log('Loading Mind Matrix Plugin...');
 
-        try {
-            // Initialize core services
-            await this.initializeCoreServices();
+		try {
+			// Load settings first
+			await this.loadSettings();
 
-            // Load and initialize settings
-            await this.loadSettings();
-            await this.initializeVaultIfNeeded();
+			// Initialize core services
+			await this.initializeCoreServices();
 
-            // Add settings tab
-            this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
+			// Initialize vault if needed
+			await this.initializeVaultIfNeeded();
 
-            // Initialize remaining services if vault is ready
-            if (isVaultInitialized(this.settings)) {
-                await this.initializeServices();
-            }
+			// Add settings tab
+			this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
 
-            // Check and notify about missing configurations
-            this.checkRequiredConfigurations();
+			// Initialize sync manager first
+			if (isVaultInitialized(this.settings)) {
+				await this.initializeSyncManager();
+				await this.startSyncProcess();
+			}
 
-            // Register event handlers and commands
-            this.registerEventHandlers();
-            this.addCommands();
+			// Register event handlers and commands
+			this.registerEventHandlers();
+			this.addCommands();
 
-        } catch (error) {
-            console.error('Failed to initialize Mind Matrix Plugin:', error);
-            new Notice('Mind Matrix Plugin failed to initialize. Check the console for details.');
-        }
-    }
+		} catch (error) {
+			console.error('Failed to initialize Mind Matrix Plugin:', error);
+			new Notice('Mind Matrix Plugin failed to initialize. Check the console for details.');
+		}
+	}
 
-    async onunload() {
-        console.log('Unloading Mind Matrix Plugin...');
-        this.queueService?.stop();
-        this.notificationManager?.clear();
-    }
+	async onunload() {
+		console.log('Unloading Mind Matrix Plugin...');
+		if (this.initializationTimeout) {
+			clearTimeout(this.initializationTimeout);
+		}
+		if (this.syncCheckInterval) {
+			clearInterval(this.syncCheckInterval);
+		}
+		this.queueService?.stop();
+		this.notificationManager?.clear();
+		this.initialSyncManager?.stop();
+		this.notificationManager?.clear();
+	}
 
-    private async initializeCoreServices(): Promise<void> {
-        // Initialize error handler
-        this.errorHandler = new ErrorHandler(
-            this.settings?.debug ?? DEFAULT_SETTINGS.debug,
-            this.app.vault.adapter.getBasePath()
-        );
+	private async startSyncProcess(): Promise<void> {
+		if (!this.syncManager) {
+			throw new Error('Sync manager not initialized');
+		}
 
-        // Initialize notification manager
-        this.notificationManager = new NotificationManager(
-            this.addStatusBarItem(),
-            this.settings?.enableNotifications ?? true,
-            this.settings?.enableProgressBar ?? true
-        );
-    }
+		try {
+			// Initial sync check
+			const syncStatus = await this.syncManager.validateSyncState();
 
-    private async loadSettings() {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    }
+			if (!syncStatus.isValid) {
+				if (this.settings.sync.requireSync) {
+					throw new Error(`Sync validation failed: ${syncStatus.error}`);
+				} else {
+					console.warn(`Sync validation warning: ${syncStatus.error}`);
+					new Notice(`Sync warning: ${syncStatus.error}`);
+				}
+			}
 
-    async saveSettings() {
-        await this.saveData(this.settings);
+			// Initialize remaining services
+			await this.initializeServices();
 
-        // Update service settings
-        this.notificationManager?.updateSettings(
-            this.settings.enableNotifications,
-            this.settings.enableProgressBar
-        );
-        this.errorHandler?.updateSettings(this.settings.debug);
+			// Start periodic sync checks
+			this.startPeriodicSyncChecks();
 
-        // Reinitialize services if settings have changed
-        if (isVaultInitialized(this.settings)) {
-            await this.initializeServices();
-        }
-    }
+			// Start initial sync if enabled
+			if (this.settings.initialSync.enableAutoInitialSync && this.initialSyncManager) {
+				await this.initialSyncManager.startSync();
+			}
 
-    private async initializeVaultIfNeeded() {
-        if (this.isInitializing) return;
-        this.isInitializing = true;
+		} catch (error) {
+			if (this.settings.sync.requireSync) {
+				throw error;
+			} else {
+				console.error('Sync process error:', error);
+				new Notice('Sync process error. Continuing with limited functionality.');
+				await this.initializeServices();
+			}
+		}
+	}
 
-        try {
-            if (!isVaultInitialized(this.settings)) {
-                this.settings.vaultId = generateVaultId();
-                this.settings.lastKnownVaultName = this.app.vault.getName();
-                await this.saveSettings();
 
-                if (this.settings.enableNotifications) {
-                    new Notice('Vault initialized with new ID');
-                }
-            } else if (this.settings.lastKnownVaultName !== this.app.vault.getName()) {
-                this.settings.lastKnownVaultName = this.app.vault.getName();
-                await this.saveSettings();
-            }
-        } finally {
-            this.isInitializing = false;
-        }
-    }
+	private async initializeSyncManager(): Promise<void> {
+		if (!this.errorHandler) {
+			throw new Error('Error handler must be initialized before sync manager');
+		}
 
-    private async initializeServices() {
-        console.log('Initializing services...', {
-            hasVault: !!this.app.vault,
-            hasErrorHandler: !!this.errorHandler
-        });
+		try {
+			this.syncManager = new SyncFileManager(
+				this.app.vault,
+				this.errorHandler,
+				this.settings.sync.syncFilePath,
+				this.settings.sync.backupInterval
+			);
 
-        if (!this.errorHandler) {
-            throw new Error('Core services not initialized');
-        }
+			await this.syncManager.initialize();
+			console.log('Sync manager initialized successfully');
 
-        try {
-            // Initialize FileTracker
-            this.fileTracker = new FileTracker(this.app.vault, this.errorHandler);
-            await this.fileTracker.initialize();
-            console.log('FileTracker initialized.');
+		} catch (error) {
+			console.error('Failed to initialize sync manager:', error);
+			if (this.settings.enableNotifications) {
+				new Notice('Failed to initialize sync system. Some features may be unavailable.');
+			}
+			throw error;
+		}
+	}
 
-            // Initialize Supabase service
-            try {
-                this.supabaseService = await SupabaseService.getInstance(this.settings);
-                if (!this.supabaseService) {
-                    new Notice('Supabase service not initialized. Please configure your API settings.');
-                    console.error('Supabase service initialization failed: Missing configuration.');
-                    return;
-                }
-                console.log('Supabase service initialized.');
-            } catch (error) {
-                console.error('Supabase initialization error:', error);
-                new Notice(`Failed to initialize Supabase service: ${error.message}`);
-                return;
-            }
+	private async initializeCoreServices(): Promise<void> {
+		// Initialize error handler
+		this.errorHandler = new ErrorHandler(
+			this.settings?.debug ?? DEFAULT_SETTINGS.debug,
+			this.app.vault.adapter.getBasePath()
+		);
 
-            // Initialize OpenAI service
-            this.openAIService = new OpenAIService(this.settings.openai, this.errorHandler);
-            console.log('OpenAI service initialized.');
+		// Initialize notification manager
+		this.notificationManager = new NotificationManager(
+			this.addStatusBarItem(),
+			this.settings?.enableNotifications ?? true,
+			this.settings?.enableProgressBar ?? true
+		);
+	}
 
-            // Verify vault access
-            if (!this.app.vault) {
-                throw new Error('Vault is not available');
-            }
+	private async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
 
-            // Initialize queue service
-            if (this.notificationManager && this.supabaseService && this.openAIService) {
-                try {
-                    this.queueService = new QueueService(
-                        this.settings.queue.maxConcurrent,
-                        this.settings.queue.retryAttempts,
-                        this.supabaseService,
-                        this.openAIService,
-                        this.errorHandler,
-                        this.notificationManager,
-                        this.app.vault,
-                        this.settings.chunking
-                    );
+	async saveSettings() {
+		await this.saveData(this.settings);
 
-                    // Start the queue service
-                    this.queueService.start();
-                    console.log('Queue service initialized and started.');
-                } catch (error) {
-                    console.error('Failed to initialize QueueService:', error);
-                    new Notice(`Failed to initialize queue service: ${error.message}`);
-                    throw error;
-                }
-            } else {
-                throw new Error('Required services not available for QueueService initialization');
-            }
-        } catch (error) {
-            console.error('Failed to initialize services:', error);
-            throw error;
-        }
-    }
+		// Update service settings
+		this.notificationManager?.updateSettings(
+			this.settings.enableNotifications,
+			this.settings.enableProgressBar
+		);
+		this.errorHandler?.updateSettings(this.settings.debug);
 
-    private checkRequiredConfigurations(): void {
-        if (!this.settings.openai.apiKey) {
-            new Notice('OpenAI API key is missing. AI features are disabled. Configure it in the settings.');
-        }
+		// Reinitialize services if settings have changed
+		if (isVaultInitialized(this.settings)) {
+			await this.initializeServices();
+		}
+	}
 
-        if (!this.settings.supabase.url || !this.settings.supabase.apiKey) {
-            new Notice('Supabase configuration is incomplete. Database features are disabled. Configure it in the settings.');
-        }
-    }
+	private startPeriodicSyncChecks(): void {
+		if (this.syncCheckInterval) {
+			clearInterval(this.syncCheckInterval);
+		}
 
-    private registerEventHandlers() {
-        // File creation events
-        this.registerEvent(
-            this.app.vault.on('create', async (file) => {
-                if (!(file instanceof TFile)) return;
-                if (!this.shouldProcessFile(file)) return;
+		this.syncCheckInterval = setInterval(async () => {
+			await this.performSyncCheck();
+		}, this.settings.sync.checkInterval);
+	}
 
-                await this.fileTracker?.handleCreate(file);
-                await this.queueFileProcessing(file, 'CREATE');
-            })
-        );
+	private async performSyncCheck(): Promise<void> {
+		if (!this.syncManager) return;
 
-        // File modification events
-        this.registerEvent(
-            this.app.vault.on('modify', async (file) => {
-                if (!(file instanceof TFile)) return;
-                if (!this.shouldProcessFile(file)) return;
+		try {
+			const syncStatus = await this.syncManager.validateSyncState();
 
-                await this.fileTracker?.handleModify(file);
-                await this.queueFileProcessing(file, 'UPDATE');
-            })
-        );
+			if (!syncStatus.isValid) {
+				console.warn(`Sync check failed: ${syncStatus.error}`);
 
-        // File deletion events
-        this.registerEvent(
-            this.app.vault.on('delete', async (file) => {
-                if (!(file instanceof TFile)) return;
-                if (!this.shouldProcessFile(file)) return;
+				if (this.settings.enableNotifications) {
+					new Notice(`Sync issue detected: ${syncStatus.error}`);
+				}
 
-                await this.fileTracker?.handleDelete(file);
-                await this.queueFileProcessing(file, 'DELETE');
-            })
-        );
+				// Attempt recovery
+				const recovered = await this.syncManager.attemptRecovery();
+				if (!recovered && this.settings.sync.requireSync) {
+					// If recovery failed and sync is required, restart services
+					await this.restartServices();
+				}
+			}
 
-        // File rename events
-        this.registerEvent(
-            this.app.vault.on('rename', async (file, oldPath) => {
-                if (!(file instanceof TFile)) return;
-                if (!this.shouldProcessFile(file)) return;
+			// Update last sync timestamp
+			await this.syncManager.updateLastSync();
 
-                await this.fileTracker?.handleRename(file, oldPath);
-                await this.handleFileRename(file, oldPath);
-            })
-        );
-    }
+		} catch (error) {
+			this.errorHandler?.handleError(error, {
+				context: 'performSyncCheck',
+				metadata: { timestamp: Date.now() }
+			});
+		}
+	}
 
-    private shouldProcessFile(file: TFile): boolean {
-        if (!this.queueService || !isVaultInitialized(this.settings)) {
-            return false;
-        }
+	private async restartServices(): Promise<void> {
+		// Stop existing services
+		this.queueService?.stop();
 
-        if (!this.settings.enableAutoSync) {
-            return false;
-        }
+		// Clear intervals
+		if (this.syncCheckInterval) {
+			clearInterval(this.syncCheckInterval);
+		}
 
-        const filePath = file.path;
+		try {
+			// Reinitialize everything
+			await this.initializeSyncManager();
+			await this.startSyncProcess();
+		} catch (error) {
+			console.error('Failed to restart services:', error);
+			if (this.settings.enableNotifications) {
+				new Notice('Failed to restart services after sync error');
+			}
+		}
+	}
 
-        // Check excluded folders
-        const isExcludedFolder = this.settings.exclusions.excludedFolders.some(
-            folder => filePath.startsWith(folder)
-        );
-        if (isExcludedFolder) return false;
+	private async initializeVaultIfNeeded() {
+		if (this.isInitializing) return;
+		this.isInitializing = true;
 
-        // Check excluded file types
-        const isExcludedType = this.settings.exclusions.excludedFileTypes.some(
-            ext => filePath.endsWith(ext)
-        );
-        if (isExcludedType) return false;
+		try {
+			if (!isVaultInitialized(this.settings)) {
+				this.settings.vaultId = generateVaultId();
+				this.settings.lastKnownVaultName = this.app.vault.getName();
+				await this.saveSettings();
 
-        // Check excluded file prefixes
-        const fileName = file.name;
-        const isExcludedPrefix = this.settings.exclusions.excludedFilePrefixes.some(
-            prefix => fileName.startsWith(prefix)
-        );
-        if (isExcludedPrefix) return false;
+				if (this.settings.enableNotifications) {
+					new Notice('Vault initialized with new ID');
+				}
+			} else if (this.settings.lastKnownVaultName !== this.app.vault.getName()) {
+				this.settings.lastKnownVaultName = this.app.vault.getName();
+				await this.saveSettings();
+			}
+		} finally {
+			this.isInitializing = false;
+		}
+	}
 
-        return true;
-    }
+	private async initializeServices() {
+		console.log('Initializing services...', {
+			hasVault: !!this.app.vault,
+			hasErrorHandler: !!this.errorHandler
+		});
 
-    private async queueFileProcessing(file: TFile, type: 'CREATE' | 'UPDATE' | 'DELETE') {
-        try {
-            if (!this.queueService || !this.fileTracker) {
-                console.error('Required services not initialized:', {
-                    queueService: !!this.queueService,
-                    fileTracker: !!this.fileTracker
-                });
-                return;
-            }
+		if (!this.errorHandler) {
+			throw new Error('Core services not initialized');
+		}
 
-            console.log('Starting file processing:', {
-                fileName: file.name,
-                type: type,
-                path: file.path
-            });
+		try {
+			// Initialize FileTracker
+			this.fileTracker = new FileTracker(this.app.vault, this.errorHandler, this.settings.sync.syncFilePath);
+			await this.fileTracker.initialize();
+			console.log('FileTracker initialized.');
 
-            const metadata = await this.fileTracker.createFileMetadata(file);
-            console.log('Created metadata:', metadata);
+			// Initialize Supabase service
+			try {
+				this.supabaseService = await SupabaseService.getInstance(this.settings);
+				if (!this.supabaseService) {
+					new Notice('Supabase service not initialized. Please configure your API settings.');
+					console.error('Supabase service initialization failed: Missing configuration.');
+					return;
+				}
+				console.log('Supabase service initialized.');
+			} catch (error) {
+				console.error('Supabase initialization error:', error);
+				new Notice(`Failed to initialize Supabase service: ${error.message}`);
+				return;
+			}
 
-            const task = {
-                id: file.path,
-                type: type,
-                priority: type === 'DELETE' ? 2 : 1,
-                maxRetries: this.settings.queue.retryAttempts,
-                retryCount: 0,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-                status: 'PENDING',
-                metadata,
-                data: {}
-            };
+			// Initialize OpenAI service
+			this.openAIService = new OpenAIService(this.settings.openai, this.errorHandler);
+			console.log('OpenAI service initialized.');
 
-            console.log('Created task:', task);
-            await this.queueService.addTask(task);
-            console.log('Task added to queue');
+			// Verify vault access
+			if (!this.app.vault) {
+				throw new Error('Vault is not available');
+			}
 
-            if (this.settings.enableNotifications) {
-                const action = type.toLowerCase();
-                new Notice(`Queued ${action} for processing: ${file.name}`);
-            }
-        } catch (error) {
-            console.error('Error in queueFileProcessing:', error);
-            this.errorHandler?.handleError(error, {
-                context: 'queueFileProcessing',
-                metadata: { filePath: file.path, type }
-            });
+			// Initialize queue service
+			if (this.notificationManager && this.supabaseService && this.openAIService) {
+				try {
+					this.queueService = new QueueService(
+						this.settings.queue.maxConcurrent,
+						this.settings.queue.retryAttempts,
+						this.supabaseService,
+						this.openAIService,
+						this.errorHandler,
+						this.notificationManager,
+						this.app.vault,
+						this.settings.chunking
+					);
 
-            if (this.settings.enableNotifications) {
-                new Notice(`Failed to queue ${file.name} for processing`);
-            }
-        }
-    }
+					// Start the queue service
+					this.queueService.start();
+					console.log('Queue service initialized and started.');
+				} catch (error) {
+					console.error('Failed to initialize QueueService:', error);
+					new Notice(`Failed to initialize queue service: ${error.message}`);
+					throw error;
+				}
+			} else {
+				throw new Error('Required services not available for QueueService initialization');
+			}
 
-    private async handleFileRename(file: TFile, oldPath: string) {
-        try {
-            if (!this.supabaseService) return;
+			this.metadataExtractor = new MetadataExtractor();
+			console.log('MetadataExtractor initialized.');
 
-            const chunks = await this.supabaseService.getDocumentChunks(oldPath);
-            if (chunks.length > 0) {
-                const updatedChunks = chunks.map(chunk => ({
-                    ...chunk,
-                    metadata: {
-                        ...chunk.metadata,
-                        obsidianId: file.path,
-                        path: file.path
-                    }
-                }));
+			// Initialize InitialSyncManager
+			if (this.queueService && this.syncManager && this.metadataExtractor) {
+				this.initialSyncManager = new InitialSyncManager(
+					this.app.vault,
+					this.queueService,
+					this.syncManager,
+					this.metadataExtractor,
+					this.errorHandler,
+					this.notificationManager,
+					this.settings.initialSync
+				);
+				console.log('InitialSyncManager initialized.');
+			}
+		} catch (error) {
+			console.error('Failed to initialize services:', error);
+			throw error;
+		}
+	}
 
-                await this.supabaseService.deleteDocumentChunks(oldPath);
-                await this.supabaseService.upsertChunks(updatedChunks);
+	private checkRequiredConfigurations(): void {
+		if (!this.settings.openai.apiKey) {
+			new Notice('OpenAI API key is missing. AI features are disabled. Configure it in the settings.');
+		}
 
-                if (this.settings.enableNotifications) {
-                    new Notice(`Updated database entries for renamed file: ${file.name}`);
-                }
-            }
-        } catch (error) {
-            this.errorHandler?.handleError(error, {
-                context: 'handleFileRename',
-                metadata: { filePath: file.path, oldPath }
-            });
+		if (!this.settings.supabase.url || !this.settings.supabase.apiKey) {
+			new Notice('Supabase configuration is incomplete. Database features are disabled. Configure it in the settings.');
+		}
+	}
 
-            if (this.settings.enableNotifications) {
-                new Notice(`Failed to update database for renamed file: ${file.name}`);
-            }
-        }
-    }
+	private registerEventHandlers() {
+		// File creation events
+		this.registerEvent(
+			this.app.vault.on('create', async (file) => {
+				if (!(file instanceof TFile)) return;
 
-    private addCommands() {
-        // Force sync current file
-        this.addCommand({
-            id: 'force-sync-current-file',
-            name: 'Force sync current file',
-            checkCallback: (checking: boolean) => {
-                const file = this.app.workspace.getActiveFile();
-                if (file) {
-                    if (!checking) {
-                        this.queueFileProcessing(file, 'UPDATE');
-                    }
-                    return true;
-                }
-                return false;
-            }
-        });
+				// Ensure sync file exists before processing
+				if (!await this.ensureSyncFileExists()) {
+					new Notice('Failed to create sync file. Plugin functionality limited.');
+					return;
+				}
 
-        // Force sync all files
-        this.addCommand({
-            id: 'force-sync-all-files',
-            name: 'Force sync all files',
-            callback: async () => {
-                const files = this.app.vault.getMarkdownFiles();
-                for (const file of files) {
-                    if (this.shouldProcessFile(file)) {
-                        await this.queueFileProcessing(file, 'UPDATE');
-                    }
-                }
-            }
-        });
+				if (!this.shouldProcessFile(file)) return;
 
-        // Clear sync queue
-        this.addCommand({
-            id: 'clear-sync-queue',
-            name: 'Clear sync queue',
-            callback: () => {
-                this.queueService?.clear();
-                if (this.settings.enableNotifications) {
-                    new Notice('Sync queue cleared');
-                }
-            }
-        });
+				await this.fileTracker?.handleCreate(file);
+				await this.queueFileProcessing(file, 'CREATE');
+			}));
 
-        // Reset file tracker cache
-        this.addCommand({
-            id: 'reset-file-tracker',
-            name: 'Reset file tracker cache',
-            callback: async () => {
-                this.fileTracker?.clearCache();
-                await this.fileTracker?.initialize();
-                if (this.settings.enableNotifications) {
-                    new Notice('File tracker cache reset');
-                }
-            }
-        });
-    }
+		// File modification events
+		this.registerEvent(
+			this.app.vault.on('modify', async (file) => {
+				if (!(file instanceof TFile)) return;
+
+				// Ensure sync file exists before processing
+				if (!await this.ensureSyncFileExists()) {
+					new Notice('Failed to create sync file. Plugin functionality limited.');
+					return;
+				}
+
+				if (!this.shouldProcessFile(file)) return;
+
+				await this.fileTracker?.handleModify(file);
+				await this.queueFileProcessing(file, 'UPDATE');
+			}));
+
+		// File deletion events
+		this.registerEvent(
+			this.app.vault.on('delete', async (file) => {
+				if (!(file instanceof TFile)) return;
+
+				// Special handling for sync file deletion
+				if (file.path === this.settings.sync.syncFilePath) {
+					console.log('Sync file was deleted, will recreate on next operation');
+					return;
+				}
+
+				// Ensure sync file exists before processing
+				if (!await this.ensureSyncFileExists()) {
+					new Notice('Failed to create sync file. Plugin functionality limited.');
+					return;
+				}
+
+				if (!this.shouldProcessFile(file)) return;
+
+				await this.fileTracker?.handleDelete(file);
+				await this.queueFileProcessing(file, 'DELETE');
+			}));
+
+		// File rename events
+		this.registerEvent(
+			this.app.vault.on('rename', async (file, oldPath) => {
+				if (!(file instanceof TFile)) return;
+
+				// Ensure sync file exists before processing
+				if (!await this.ensureSyncFileExists()) {
+					new Notice('Failed to create sync file. Plugin functionality limited.');
+					return;
+				}
+
+				if (!this.shouldProcessFile(file)) return;
+
+				await this.fileTracker?.handleRename(file, oldPath);
+				await this.handleFileRename(file, oldPath);
+			}));
+	}
+
+	private shouldProcessFile(file: TFile): boolean {
+		// First check if basic requirements are met
+		if (!this.queueService || !isVaultInitialized(this.settings)) {
+			return false;
+		}
+
+		if (!this.settings.enableAutoSync) {
+			return false;
+		}
+
+		// Ensure exclusions settings exist with fallbacks
+		const exclusions = this.settings.exclusions || {
+			excludedFiles: [],
+			excludedFolders: [],
+			excludedFileTypes: [],
+			excludedFilePrefixes: []
+		};
+
+		const filePath = file.path;
+		const fileName = file.name;
+
+		// Check specific excluded files
+		if (Array.isArray(exclusions.excludedFiles) &&
+			exclusions.excludedFiles.includes(fileName)) {
+			console.log('Skipping excluded file:', fileName);
+			return false;
+		}
+
+		// Check excluded folders
+		if (Array.isArray(exclusions.excludedFolders)) {
+			const isExcludedFolder = exclusions.excludedFolders.some(folder => {
+				const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
+				return filePath.startsWith(normalizedFolder);
+			});
+			if (isExcludedFolder) {
+				console.log('Skipping file in excluded folder:', filePath);
+				return false;
+			}
+		}
+
+		// Check excluded file types
+		if (Array.isArray(exclusions.excludedFileTypes)) {
+			const isExcludedType = exclusions.excludedFileTypes.some(
+				ext => filePath.toLowerCase().endsWith(ext.toLowerCase())
+			);
+			if (isExcludedType) {
+				console.log('Skipping excluded file type:', filePath);
+				return false;
+			}
+		}
+
+		// Check excluded file prefixes
+		if (Array.isArray(exclusions.excludedFilePrefixes)) {
+			const isExcludedPrefix = exclusions.excludedFilePrefixes.some(
+				prefix => fileName.startsWith(prefix)
+			);
+			if (isExcludedPrefix) {
+				console.log('Skipping file with excluded prefix:', fileName);
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	private async ensureSyncFileExists(): Promise<boolean> {
+		if (!this.syncManager) {
+			console.error('Sync manager not initialized');
+			return false;
+		}
+
+		try {
+			const syncFile = this.app.vault.getAbstractFileByPath(this.settings.sync.syncFilePath);
+			if (!syncFile) {
+				console.log('Sync file missing, recreating...');
+				await this.syncManager.initialize();
+				new Notice('Recreated sync file');
+				return true;
+			}
+			return true;
+		} catch (error) {
+			console.error('Error ensuring sync file exists:', error);
+			return false;
+		}
+	}
+
+	private async queueFileProcessing(file: TFile, type: 'CREATE' | 'UPDATE' | 'DELETE') {
+		try {
+			if (!this.queueService || !this.fileTracker) {
+				console.error('Required services not initialized:', {
+					queueService: !!this.queueService,
+					fileTracker: !!this.fileTracker
+				});
+				return;
+			}
+
+			console.log('Starting file processing:', {
+				fileName: file.name,
+				type: type,
+				path: file.path
+			});
+
+			const metadata = await this.fileTracker.createFileMetadata(file);
+			console.log('Created metadata:', metadata);
+
+			const task = {
+				id: file.path,
+				type: type,
+				priority: type === 'DELETE' ? 2 : 1,
+				maxRetries: this.settings.queue.retryAttempts,
+				retryCount: 0,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				status: 'PENDING',
+				metadata,
+				data: {}
+			};
+
+			console.log('Created task:', task);
+			await this.queueService.addTask(task);
+			console.log('Task added to queue');
+
+			if (this.settings.enableNotifications) {
+				const action = type.toLowerCase();
+				new Notice(`Queued ${action} for processing: ${file.name}`);
+			}
+		} catch (error) {
+			console.error('Error in queueFileProcessing:', error);
+			this.errorHandler?.handleError(error, {
+				context: 'queueFileProcessing',
+				metadata: { filePath: file.path, type }
+			});
+
+			if (this.settings.enableNotifications) {
+				new Notice(`Failed to queue ${file.name} for processing`);
+			}
+		}
+	}
+
+	private async handleFileRename(file: TFile, oldPath: string) {
+		try {
+			if (!this.supabaseService) return;
+
+			const chunks = await this.supabaseService.getDocumentChunks(oldPath);
+			if (chunks.length > 0) {
+				const updatedChunks = chunks.map(chunk => ({
+					...chunk,
+					metadata: {
+						...chunk.metadata,
+						obsidianId: file.path,
+						path: file.path
+					}
+				}));
+
+				await this.supabaseService.deleteDocumentChunks(oldPath);
+				await this.supabaseService.upsertChunks(updatedChunks);
+
+				if (this.settings.enableNotifications) {
+					new Notice(`Updated database entries for renamed file: ${file.name}`);
+				}
+			}
+		} catch (error) {
+			this.errorHandler?.handleError(error, {
+				context: 'handleFileRename',
+				metadata: { filePath: file.path, oldPath }
+			});
+
+			if (this.settings.enableNotifications) {
+				new Notice(`Failed to update database for renamed file: ${file.name}`);
+			}
+		}
+	}
+
+	private addCommands() {
+		// Force sync current file
+		this.addCommand({
+			id: 'force-sync-current-file',
+			name: 'Force sync current file',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				if (file) {
+					if (!checking) {
+						this.queueFileProcessing(file, 'UPDATE');
+					}
+					return true;
+				}
+				return false;
+			}
+		});
+
+		// Force sync all files
+		this.addCommand({
+			id: 'force-sync-all-files',
+			name: 'Force sync all files',
+			callback: async () => {
+				const files = this.app.vault.getMarkdownFiles();
+				for (const file of files) {
+					if (this.shouldProcessFile(file)) {
+						await this.queueFileProcessing(file, 'UPDATE');
+					}
+				}
+			}
+		});
+
+		// Clear sync queue
+		this.addCommand({
+			id: 'clear-sync-queue',
+			name: 'Clear sync queue',
+			callback: () => {
+				this.queueService?.clear();
+				if (this.settings.enableNotifications) {
+					new Notice('Sync queue cleared');
+				}
+			}
+		});
+
+		// Reset file tracker cache
+		this.addCommand({
+			id: 'reset-file-tracker',
+			name: 'Reset file tracker cache',
+			callback: async () => {
+				this.fileTracker?.clearCache();
+				await this.fileTracker?.initialize();
+				if (this.settings.enableNotifications) {
+					new Notice('File tracker cache reset');
+				}
+			}
+		});
+
+		// Start initial sync
+		this.addCommand({
+			id: 'start-initial-sync',
+			name: 'Start initial vault sync',
+			callback: async () => {
+				if (this.initialSyncManager) {
+					await this.initialSyncManager.startSync();
+				} else {
+					new Notice('Initial sync manager not initialized');
+				}
+			}
+		});
+
+		// Stop initial sync
+		this.addCommand({
+			id: 'stop-initial-sync',
+			name: 'Stop initial vault sync',
+			callback: () => {
+				this.initialSyncManager?.stop();
+				new Notice('Initial sync stopped');
+			}
+		});
+	}
 }

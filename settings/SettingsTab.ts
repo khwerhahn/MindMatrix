@@ -250,6 +250,20 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 					}
 				}));
 
+		new Setting(containerEl)
+			.setName('Excluded Files')
+			.setDesc('Specific files to exclude from syncing (e.g., _mindmatrixsync.md). Separate multiple files with commas.')
+			.addText(text => text
+				.setValue(this.settings.exclusions.excludedFiles.join(', '))
+				.onChange(async (value) => {
+					this.settings.exclusions.excludedFiles = value
+						.split(',')
+						.map(s => s.trim())
+						.filter(s => s);
+					await this.plugin.saveSettings();
+					new Notice('Excluded files updated.');
+				}));
+
 		// Debug Settings
 		if (this.settings.debug.enableDebugLogs) {
 			containerEl.createEl('h2', { text: 'Debug Settings' });

@@ -405,63 +405,72 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 ## ** Task List **
 Analyse the code base agaist the task list and determine the next steps.
 
-Phase 1: Foundation
-1. Database Schema Updates
-   - Add new columns for metadata (tags, aliases, linked_documents arrays)
-   - Add timestamp columns (created_at, vectorized_at)
-   - Update existing SQL functions to handle new columns
-   - Create migration scripts for existing data
-
-2. Metadata Extraction System
-   - Implement YAML frontmatter parsing
-   - Create tag extraction system
-   - Build alias detection
-   - Implement link parsing
-   - Add timestamp extraction
-   - Create metadata validation system
-
-3. Sync File Management
-   - Implement sync file structure (_mindmatrixsync.md)
-   - Create atomic file operations
-   - Build backup system
-   - Implement validation checks
-   - Create recovery mechanisms
-
 Phase 2: Core Features
-1. Enhanced Document Processing
-   - Update chunking algorithm to preserve metadata context
-   - Implement metadata-aware embedding generation
-   - Create content formatting system
-   - Build metadata validation pipeline
+Multi-Device Sync 🔄
 
-2. Initial Vault Sync
-   - Create initial scan system
-   - Implement batch processing
-   - Build progress tracking
-   - Create status management
-   - Implement frontmatter updates
-
-3. Multi-Device Sync
-   - Implement sync status checking
-   - Create device identification system
-   - Build sync state tracking
-   - Implement sync file locking
-   - Create sync status reporting
+Implement sync status checking
+Create device identification system
+Build sync state tracking
+Implement sync file locking
+Create sync status reporting
 
 Phase 3: Advanced Features
-1. Delta Detection System
-   - Implement change detection algorithm
-   - Create diff generation system
-   - Build partial update system
-   - Implement smart reprocessing
-   - Create optimization for large files
+Delta Detection System 🔄
 
-2. Conflict Resolution
-   - Implement timestamp-based resolution
-   - Create merge strategy system
-   - Build conflict detection
-   - Implement user notification system
-   - Create manual resolution interface
+Implement change detection algorithm
+Create diff generation system
+Build partial update system
+Implement smart reprocessing
+Create optimization for large files
+
+Conflict Resolution 🔄
+
+Implement timestamp-based resolution
+Create merge strategy system
+Build conflict detection
+Implement user notification system
+Create manual resolution interface
+
+Next Implementation Steps
+
+Multi-Device Sync Implementation
+
+Design device identification system
+Create sync state tracking improvements
+Implement file locking mechanism
+Build enhanced status reporting system
+
+
+Delta Detection Implementation
+
+Design change detection algorithm
+Create efficient diff generation
+Implement partial update system
+Add file optimization features
+
+
+Conflict Resolution System
+
+Design timestamp-based resolution
+Implement merge strategies
+Create conflict detection system
+Build user notification interface
+
+
+
+Dependencies and Considerations:
+
+Multi-Device Sync must be implemented before Delta Detection
+Delta Detection must be in place before Conflict Resolution
+All systems must handle large files efficiently
+User feedback must be clear and actionable
+
+Legend:
+✅ Completed
+⏳ In Progress/Next Up
+🔄 Not Started
+
+Sanity check the code and the todo list to see if the the list is up to date.
 
 Dependencies and Considerations:
 1. The database schema must be updated first as it affects all other components

@@ -9,8 +9,9 @@
         "version": "node version-bump.mjs && git add manifest.json versions.json",
         "test": "jest",
         "lint": "eslint . --ext .ts",
-        "prompt": "echo '### Prompts.md ###' > combined_code_state.txt && cat Prompts.md | tr '\\n' ' ' >> combined_code_state.txt && echo '\\n### main.ts ###' >> combined_code_state.txt && cat main.ts | tr '\\n' ' ' >> combined_code_state.txt && find models/ services/ settings/ utils/ constants/ -type f -exec echo '\\n### {} ###' \\; -exec cat {} | tr '\\n' ' ' \\; >> combined_code_state.txt",
-        "loc": "open ."
+		"prompt": "bash -c 'echo \"### Prompts.md ###\\nFilename: Prompts.md\\n\" > combined_code_state.txt && cat Prompts.md | tr \"\\n\" \" \" >> combined_code_state.txt && echo \"\\n### main.ts ###\\nFilename: main.ts\\n\" >> combined_code_state.txt && cat main.ts | tr \"\\n\" \" \" >> combined_code_state.txt && for file in $(find models/ services/ settings/ utils/ constants/ -type f); do echo -e \"\\n### $file ###\\nFilename: $(basename \\\"$file\\\")\\n\"; cat \"$file\" | tr \"\\n\" \" \"; done >> combined_code_state.txt'",
+        "loc": "open .",
+		"extract": "bash extract.sh"
     },
     "keywords": [
         "obsidian",

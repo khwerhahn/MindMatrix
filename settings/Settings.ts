@@ -14,6 +14,7 @@ export interface ExclusionSettings {
 	excludedFolders: string[];      // Folders to exclude from processing
 	excludedFileTypes: string[];    // File extensions to exclude
 	excludedFilePrefixes: string[]; // File name prefixes to exclude
+	excludedFiles: string[];
 }
 
 /**
@@ -55,6 +56,29 @@ export interface DebugSettings {
 	logToFile: boolean;        // Whether to log to a file
 }
 
+export interface SyncSettings {
+	syncFilePath: string;
+	backupInterval: number;
+	checkInterval: number;
+	checkAttempts: number;
+	requireSync: boolean;
+}
+
+/**
+ * Initial sync settings
+ */
+export interface InitialSyncSettings {
+	batchSize: number;             // Number of files per batch
+	maxConcurrentBatches: number;  // Maximum concurrent batch processing
+	enableAutoInitialSync: boolean; // Auto-start initial sync
+	priorityRules: PriorityRule[]; // Rules for file processing priority
+}
+
+export interface PriorityRule {
+	pattern: string;   // Pattern to match in file path
+	priority: number;  // Priority level (higher = processed first)
+}
+
 /**
  * Main settings interface for the plugin
  */
@@ -81,6 +105,12 @@ export interface MindMatrixSettings {
 	enableAutoSync: boolean;      // Enable automatic synchronization
 	enableNotifications: boolean; // Show notifications for actions
 	enableProgressBar: boolean;   // Show a progress bar during tasks
+
+	// Sync settings
+	sync: SyncSettings;
+
+	// Initial sync settings
+	initialSync: InitialSyncSettings;
 }
 
 /**
@@ -123,11 +153,22 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 	},
 
 	exclusions: {
-		excludedFolders: ['.git', '.obsidian', 'node_modules'],
-		excludedFileTypes: ['.mp3', '.jpg', '.png'],
-		excludedFilePrefixes: ['_', '.'],
+		excludedFolders: [
+			'.obsidian',           // Obsidian config folder
+			'.trash',             // Obsidian trash folder
+			'.git',              // Git folder if used
+			'node_modules'       // Node modules if used
+		],
+		excludedFileTypes: [
+			'.mp3', '.jpg', '.png', '.pdf', // Non-markdown files
+			'.excalidraw'                    // Excalidraw files
+		],
+		excludedFilePrefixes: ['_', '.'],   // Hidden and special files
+		excludedFiles: [
+			'_mindmatrixsync.md',           // Sync file
+			'_mindmatrixsync.md.backup'     // Sync backup file
+		]
 	},
-
 	debug: {
 		enableDebugLogs: false,
 		logLevel: 'info',
@@ -137,6 +178,25 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 	enableAutoSync: true,
 	enableNotifications: true,
 	enableProgressBar: true,
+
+	sync: {
+		syncFilePath: '_mindmatrixsync.md',
+		backupInterval: 3600000,  // 1 hour in milliseconds
+		checkInterval: 300000,    // 5 minutes in milliseconds
+		checkAttempts: 3,
+		requireSync: true,
+	},
+
+	initialSync: {
+		batchSize: 50,
+		maxConcurrentBatches: 3,
+		enableAutoInitialSync: true,
+		priorityRules: [
+			{ pattern: 'daily/', priority: 3 },
+			{ pattern: 'projects/', priority: 2 },
+			{ pattern: 'archive/', priority: 1 }
+		]
+	}
 };
 
 /**
@@ -202,6 +262,43 @@ export function validateSettings(settings: MindMatrixSettings): string[] {
 	if (settings.queue.retryDelay < 0) {
 		errors.push('Retry delay cannot be negative');
 	}
+
+	// Check initial sync settings
+	if (settings.initialSync.batchSize < 1) {
+		errors.push('Initial sync batch size must be at least 1');
+	}
+	if (settings.initialSync.maxConcurrentBatches < 1) {
+		errors.push('Maximum concurrent batches must be at least 1');
+	}
+
+	return errors;
+}
+
+// In Settings.ts
+function validateExclusionSettings(settings: ExclusionSettings): string[] {
+	const errors: string[] = [];
+
+	// Validate folder paths
+	settings.excludedFolders.forEach(folder => {
+		if (folder.includes('..')) {
+			errors.push(`Invalid folder path: ${folder} (cannot contain ..)`);
+		}
+	});
+
+	// Validate file extensions
+	settings.excludedFileTypes.forEach(ext => {
+		if (!ext.startsWith('.')) {
+			errors.push(`Invalid file extension: ${ext} (must start with .)`);
+		}
+	});
+
+	// Ensure sync files are always excluded
+	const requiredExclusions = ['_mindmatrixsync.md', '_mindmatrixsync.md.backup'];
+	requiredExclusions.forEach(file => {
+		if (!settings.excludedFiles.includes(file)) {
+			settings.excludedFiles.push(file);
+		}
+	});
 
 	return errors;
 }

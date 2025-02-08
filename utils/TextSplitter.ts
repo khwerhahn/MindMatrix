@@ -1,9 +1,12 @@
+// src/utils/TextSplitter.ts
+
 import {
 	DocumentChunk,
 	DocumentMetadata,
 	DocumentProcessingError,
 } from '../models/DocumentChunk';
 import { DEFAULT_CHUNKING_OPTIONS } from '../settings/Settings';
+import { MetadataExtractor } from '../services/MetadataExtractor';
 
 export class TextSplitter {
 	private settings: {
@@ -11,15 +14,20 @@ export class TextSplitter {
 		chunkOverlap: number;
 		minChunkSize: number;
 	};
+	private metadataExtractor: MetadataExtractor;
 
 	// Regex patterns for splitting
 	private readonly SENTENCE_BOUNDARY = /[.!?]\s+/;
 	private readonly PARAGRAPH_BOUNDARY = /\n\s*\n/;
 	private readonly YAML_FRONT_MATTER = /^---\n([\s\S]*?)\n---/;
 
-	constructor(settings?: { chunkSize: number; chunkOverlap: number; minChunkSize: number }) {
+	constructor(
+		settings?: { chunkSize: number; chunkOverlap: number; minChunkSize: number },
+		metadataExtractor?: MetadataExtractor
+	) {
 		this.settings = settings || { ...DEFAULT_CHUNKING_OPTIONS };
 		this.validateSettings(this.settings);
+		this.metadataExtractor = metadataExtractor || new MetadataExtractor();
 	}
 
 	private validateSettings(settings: { chunkSize: number; chunkOverlap: number; minChunkSize: number }) {
@@ -34,12 +42,11 @@ export class TextSplitter {
 		}
 	}
 
-	public splitDocument(content: string, metadata: DocumentMetadata): DocumentChunk[] {
+	public async splitDocument(content: string, metadata: DocumentMetadata): Promise<DocumentChunk[]> {
 		try {
 			console.log('Starting document split:', {
 				contentLength: content.length,
-				settings: this.settings,
-				content: content // Log the actual content
+				settings: this.settings
 			});
 
 			if (!content?.trim()) {
@@ -53,26 +60,37 @@ export class TextSplitter {
 			if (frontMatterMatch) {
 				try {
 					frontMatter = this.parseFrontMatter(frontMatterMatch[1]);
-					metadata.frontMatter = frontMatter;
+					// Enhance metadata using MetadataExtractor for the complete content
+					const enhancedMetadata = await this.enhanceMetadata(content, metadata, frontMatter);
+					metadata = enhancedMetadata;
 					content = content.replace(this.YAML_FRONT_MATTER, '').trim();
-					console.log('Front matter extracted:', { frontMatter });
+					console.log('Front matter extracted and metadata enhanced:', { frontMatter });
 				} catch (error) {
 					console.warn('Failed to parse front matter:', error);
 				}
 			}
 
-			// If content is smaller than chunkSize, return it as a single chunk
+			// If content is smaller than chunkSize or minChunkSize, return it as a single chunk
 			const trimmedContent = content.trim();
-			if (trimmedContent.length <= this.settings.chunkSize) {
+			if (trimmedContent.length <= Math.max(this.settings.minChunkSize, this.settings.chunkSize)) {
+				if (trimmedContent.length === 0) {
+					console.log('No content after trimming, returning empty array');
+					return [];
+				}
+
 				console.log('Content is smaller than chunk size, creating single chunk:', {
 					contentLength: trimmedContent.length,
-					chunkSize: this.settings.chunkSize
+					chunkSize: this.settings.chunkSize,
+					minChunkSize: this.settings.minChunkSize
 				});
-				return [{
-					content: trimmedContent,
-					chunkIndex: 0,
-					metadata: { ...metadata }
-				}];
+
+				const singleChunk = this.createChunk(trimmedContent, 0, metadata);
+				console.log('Created single chunk:', {
+					chunkSize: singleChunk.content.length,
+					preview: singleChunk.content.substring(0, 100)
+				});
+
+				return [singleChunk];
 			}
 
 			// Split into paragraphs first
@@ -153,9 +171,9 @@ export class TextSplitter {
 				chunks.push(this.createChunk(currentChunk, chunkIndex++, metadata));
 			}
 
-			// If no chunks were created but we have content, create at least one chunk
+			// Ensure we have at least one chunk if we have content
 			if (chunks.length === 0 && trimmedContent.length > 0) {
-				console.log('No chunks created but content exists, creating single chunk:', {
+				console.log('Creating fallback chunk for content:', {
 					contentLength: trimmedContent.length
 				});
 				chunks.push(this.createChunk(trimmedContent, 0, metadata));
@@ -216,6 +234,48 @@ export class TextSplitter {
 				currentChunk.content = overlapText + '\n\n' + currentChunk.content;
 			}
 		}
+	}
+
+	private async enhanceMetadata(
+		content: string,
+		baseMetadata: DocumentMetadata,
+		frontMatter: Record<string, any> | null
+	): Promise<DocumentMetadata> {
+		// Start with the base metadata
+		const enhancedMetadata = { ...baseMetadata };
+
+		// Extract tags, links, and aliases from the content
+		const tags = new Set(enhancedMetadata.tags || []);
+		const links = new Set(enhancedMetadata.links || []);
+		let aliases = enhancedMetadata.customMetadata?.aliases || [];
+
+		// Extract all metadata components using MetadataExtractor
+		const contentMetadata = await this.metadataExtractor.extractMetadata({
+			path: baseMetadata.obsidianId,
+			stat: {
+				mtime: baseMetadata.lastModified,
+				ctime: baseMetadata.created,
+				size: baseMetadata.size
+			},
+			vault: baseMetadata.vault
+		} as any, content);
+
+		// Merge the extracted metadata
+		contentMetadata.tags?.forEach(tag => tags.add(tag));
+		contentMetadata.links?.forEach(link => links.add(link));
+		if (contentMetadata.customMetadata?.aliases) {
+			aliases = [...new Set([...aliases, ...contentMetadata.customMetadata.aliases])];
+		}
+
+		// Update the metadata
+		enhancedMetadata.tags = Array.from(tags);
+		enhancedMetadata.customMetadata = {
+			...enhancedMetadata.customMetadata,
+			aliases
+		};
+		enhancedMetadata.frontMatter = frontMatter || enhancedMetadata.frontMatter;
+
+		return enhancedMetadata;
 	}
 
 	private parseFrontMatter(frontMatter: string): Record<string, any> {
