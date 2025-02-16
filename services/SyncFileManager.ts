@@ -75,8 +75,27 @@ export class SyncFileManager {
 	 * Create a new sync file with initial structure
 	 */
 	private async createSyncFile(): Promise<void> {
+		console.log('Starting sync file creation with wait periods...');
 		const initialContent = this.generateInitialContent();
+
+		// First wait period - 20 seconds before creation
+		console.log('Waiting 20 seconds before creating sync file...');
+		await new Promise(resolve => setTimeout(resolve, 20000));
+
+		// Create the file
 		this.syncFile = await this.vault.create(this.syncFilePath, initialContent);
+		console.log('Sync file created, starting stability wait period...');
+
+		// Second wait period - 5 seconds after creation
+		await new Promise(resolve => setTimeout(resolve, 5000));
+
+		// Verify file exists and is readable
+		const fileExists = this.vault.getAbstractFileByPath(this.syncFilePath);
+		if (!fileExists) {
+			throw new Error('Sync file creation failed - file not found after wait period');
+		}
+
+		console.log('Sync file creation completed successfully');
 	}
 
 	/**

@@ -19,6 +19,7 @@ export class QueueService {
 	private processingQueue: ProcessingTask[] = [];
 	private isProcessing: boolean = false;
 	private isStopped: boolean = true;
+	private isInitialized: boolean = false;
 	private processingInterval: NodeJS.Timeout | null = null;
 	private textSplitter: TextSplitter;
 	private vault: Vault;

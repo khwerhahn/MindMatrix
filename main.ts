@@ -9,6 +9,9 @@ import { MindMatrixSettingsTab } from './settings/SettingsTab';
 import { SyncFileManager } from './services/SyncFileManager';
 import { InitialSyncManager } from './services/InitialSyncManager';
 import { MetadataExtractor } from './services/MetadataExtractor';
+import { StatusManager, PluginStatus } from './services/StatusManager';
+import { SyncDetectionManager } from './services/SyncDetectionManager';
+
 import {
 	MindMatrixSettings,
 	DEFAULT_SETTINGS,
@@ -31,12 +34,20 @@ export default class MindMatrixPlugin extends Plugin {
 	private syncCheckAttempts = 0;
 	private initialSyncManager: InitialSyncManager | null = null;
 	private metadataExtractor: MetadataExtractor | null = null;
+	private statusManager: StatusManager | null = null;
+	private syncDetectionManager: SyncDetectionManager | null = null;
 
 	async onload() {
 		console.log('Loading Mind Matrix Plugin...');
 
 		try {
-			// Load settings first
+			// Initialize status manager first
+			this.statusManager = new StatusManager(this.addStatusBarItem());
+			this.statusManager.setStatus(PluginStatus.INITIALIZING, {
+				message: 'Loading Mind Matrix Plugin...'
+			});
+
+			// Load settings
 			await this.loadSettings();
 
 			// Initialize core services
@@ -48,34 +59,93 @@ export default class MindMatrixPlugin extends Plugin {
 			// Add settings tab
 			this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
 
-			// Initialize sync manager first
 			if (isVaultInitialized(this.settings)) {
-				await this.initializeSyncManager();
-				await this.startSyncProcess();
+				// Initialize sync detection
+				this.statusManager.setStatus(PluginStatus.WAITING_FOR_SYNC, {
+					message: 'Waiting for Obsidian sync to settle...'
+				});
+
+				// Create and start sync detection
+				this.syncDetectionManager = new SyncDetectionManager(
+					this,
+					this.statusManager,
+					this.onSyncQuietPeriodReached.bind(this)
+				);
+				this.syncDetectionManager.startMonitoring();
+			} else {
+				// If vault isn't initialized, proceed normally
+				await this.completeInitialization();
 			}
 
+		} catch (error) {
+			console.error('Failed to initialize Mind Matrix Plugin:', error);
+			this.statusManager?.setStatus(PluginStatus.ERROR, {
+				message: 'Failed to initialize plugin. Check console for details.',
+				error: error as Error
+			});
+		}
+	}
+
+	private async onSyncQuietPeriodReached(): Promise<void> {
+		try {
+			// Stop monitoring as we've reached quiet period
+			this.syncDetectionManager?.stopMonitoring();
+
+			this.statusManager?.setStatus(PluginStatus.CHECKING_FILE, {
+				message: 'Initializing sync manager...'
+			});
+
+			// Initialize sync manager
+			await this.initializeSyncManager();
+			await this.startSyncProcess();
+
+			// Complete remaining initialization
+			await this.completeInitialization();
+
+		} catch (error) {
+			console.error('Error during quiet period initialization:', error);
+			this.statusManager?.setStatus(PluginStatus.ERROR, {
+				message: 'Failed to initialize after sync quiet period',
+				error: error as Error
+			});
+		}
+	}
+
+	private async completeInitialization(): Promise<void> {
+		try {
 			// Register event handlers and commands
 			this.registerEventHandlers();
 			this.addCommands();
 
+			// Update status to ready
+			this.statusManager?.setStatus(PluginStatus.READY, {
+				message: 'Mind Matrix is ready'
+			});
 		} catch (error) {
-			console.error('Failed to initialize Mind Matrix Plugin:', error);
-			new Notice('Mind Matrix Plugin failed to initialize. Check the console for details.');
+			console.error('Error completing initialization:', error);
+			this.statusManager?.setStatus(PluginStatus.ERROR, {
+				message: 'Failed to complete initialization',
+				error: error as Error
+			});
 		}
 	}
 
 	async onunload() {
 		console.log('Unloading Mind Matrix Plugin...');
+
+		// Stop sync detection
+		this.syncDetectionManager?.stopMonitoring();
+
 		if (this.initializationTimeout) {
 			clearTimeout(this.initializationTimeout);
 		}
 		if (this.syncCheckInterval) {
 			clearInterval(this.syncCheckInterval);
 		}
+
 		this.queueService?.stop();
 		this.notificationManager?.clear();
 		this.initialSyncManager?.stop();
-		this.notificationManager?.clear();
 	}
 
 	private async startSyncProcess(): Promise<void> {
@@ -84,11 +154,18 @@ export default class MindMatrixPlugin extends Plugin {
 		}
 
 		try {
+			this.statusManager?.setStatus(PluginStatus.CHECKING_FILE, {
+				message: 'Checking sync file status...'
+			});
+
 			// Initial sync check
 			const syncStatus = await this.syncManager.validateSyncState();
 
 			if (!syncStatus.isValid) {
 				if (this.settings.sync.requireSync) {
+					this.statusManager?.setStatus(PluginStatus.ERROR, {
+						message: `Sync validation failed: ${syncStatus.error}`
+					});
 					throw new Error(`Sync validation failed: ${syncStatus.error}`);
 				} else {
 					console.warn(`Sync validation warning: ${syncStatus.error}`);
@@ -97,6 +174,9 @@ export default class MindMatrixPlugin extends Plugin {
 			}
 
 			// Initialize remaining services
+			this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
+				message: 'Initializing services...'
+			});
 			await this.initializeServices();
 
 			// Start periodic sync checks
@@ -104,11 +184,22 @@ export default class MindMatrixPlugin extends Plugin {
 
 			// Start initial sync if enabled
 			if (this.settings.initialSync.enableAutoInitialSync && this.initialSyncManager) {
+				this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
+					message: 'Starting initial vault sync...'
+				});
 				await this.initialSyncManager.startSync();
 			}
 
+			this.statusManager?.setStatus(PluginStatus.READY, {
+				message: 'Sync process completed'
+			});
+
 		} catch (error) {
 			if (this.settings.sync.requireSync) {
+				this.statusManager?.setStatus(PluginStatus.ERROR, {
+					message: 'Sync process failed',
+					error: error as Error
+				});
 				throw error;
 			} else {
 				console.error('Sync process error:', error);
@@ -145,6 +236,10 @@ export default class MindMatrixPlugin extends Plugin {
 	}
 
 	private async initializeCoreServices(): Promise<void> {
+		this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
+			message: 'Initializing core services...'
+		});
+
 		// Initialize error handler
 		this.errorHandler = new ErrorHandler(
 			this.settings?.debug ?? DEFAULT_SETTINGS.debug,
@@ -157,6 +252,10 @@ export default class MindMatrixPlugin extends Plugin {
 			this.settings?.enableNotifications ?? true,
 			this.settings?.enableProgressBar ?? true
 		);
+
+		this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
+			message: 'Core services initialized'
+		});
 	}
 
 	private async loadSettings() {

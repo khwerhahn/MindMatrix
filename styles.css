@@ -6,3 +6,36 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+.mind-matrix-status-icon {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    text-align: center;
+    line-height: 16px;
+    margin-right: 4px;
+    font-size: 12px;
+}
+
+.mind-matrix-status-icon.is-ready {
+    color: var(--color-green);
+}
+
+.mind-matrix-status-icon.is-error {
+    color: var(--color-red);
+}
+
+.mind-matrix-status-icon.is-working {
+    color: var(--color-yellow);
+    animation: spin 2s linear infinite;
+}
+
+.mind-matrix-status-icon.is-initializing {
+    color: var(--color-base-50);
+}
+
+@keyframes spin {
+    100% {
+        transform: rotate(360deg);
+    }
+}

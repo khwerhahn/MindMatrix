@@ -42,3 +42,4 @@ coverage/
 # Combined code state file
 combined_code_state.txt
 extract.txt
+output.txt
