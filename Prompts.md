@@ -22,10 +22,14 @@ The **"mind-matrix"** plugin enhances Obsidian by syncing notes with a Supabase 
 ### **1. Core Architecture**
 - **Plugin Entry Point**: `main.ts` initializes services and manages event handling.
 - **Service-Oriented Design**:
-  - `SupabaseService` handles all database interactions.
-  - `OpenAIService` manages API calls for embeddings.
-  - `QueueService` orchestrates task processing with concurrency and retries.
-  - `SyncManager` manages multi-device synchronization and status tracking.
+	- `SupabaseService` handles all database interactions.
+	- OpenAIService manages API calls for embeddings.
+	- QueueService orchestrates task processing with concurrency and retries.
+	- SyncManager manages multi-device synchronization and status tracking.
+	- EventEmitter handles inter-service communication.
+	- StatusManager centralizes plugin state tracking.
+	- SyncDetectionManager handles sync activity detection.
+	- InitialSyncManager manages initial vault synchronization.
 - **Utilities**:
   - `TextSplitter` ensures efficient document chunking.
   - `ErrorHandler` centralizes error logging and recovery.
@@ -83,7 +87,10 @@ The **"mind-matrix"** plugin enhances Obsidian by syncing notes with a Supabase 
 - **Task Queue**:
   - Supports concurrent processing with configurable limits.
   - Handles retries and backoff for failed tasks.
-  - Provides task-specific progress feedback.
+  - Event-based status updates.
+  - Queue state persistence during initialization.
+  - Detailed progress tracking.
+  - Enhanced error handling.
 - **Chunking**:
   - Uses TextSplitter to split documents into overlapping chunks for embedding.
   - Configurable parameters for chunk size, overlap, and splitting behavior.
@@ -92,26 +99,31 @@ The **"mind-matrix"** plugin enhances Obsidian by syncing notes with a Supabase 
 - **Plugin Initialization Phases**:
   1. **Pre-Initialization** (main.ts -> onload()):
      - Load minimal core services (ErrorHandler, NotificationManager)
-     - Initialize settings from disk
+	 - Initialize settings from disk
      - Register basic event handlers
 
-  2. **Sync Readiness Check** (SyncManager):
-     - Verify `_mindmatrixsync.md` existence/create if missing
+  2. **Status Management Phase**
+	 - Initialize StatusManager for centralized state tracking
+     - Setup event system for inter-service communication
+     - Begin queue monitoring
+     - Start sync detection
+
+  3. **Sync Readiness Check** (SyncManager):
+     - Verify _mindmatrixsync.md existence/create if missing
      - Monitor Obsidian sync status (3 checks, 10s intervals)
      - Handle sync timeout after 40s
      - Maintain sync state between checks
 
-  3. **Services Initialization**:
+  4. **Services Initialization**:
      - Initialize SupabaseService with connection check
      - Initialize OpenAIService with API validation
      - Setup FileTracker with initial vault scan
      - Create QueueService with configured parameters
-
-  4. **Post-Initialization**:
-     - Register file event handlers
-     - Setup command palette actions
-     - Initialize settings tab
-     - Begin normal operation
+  5. **Post-Initialization**:
+	 - Register file event handlers
+	 - Setup command palette actions
+	 - Initialize settings tab
+	 - Begin normal operation
 
 - **Sync State Management**:
   - **Sync File Structure** (`_mindmatrixsync.md`):
@@ -402,129 +414,68 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 6. Maintain data consistency across multiple devices.
 
 
-# Mind Matrix Implementation Task List
+# High Priority Tasks:
 
-## Priority Tasks ⚡
-### Enhance Sync Initialization System
-✅ Implement Status Management System
-- Created StatusManager for centralized state tracking
-- Added UI feedback through status bar
-- Implemented event system for status changes
+Fix Document Processing (NEW)
+⚡ Remove any file modification operations
+⚡ Remove vectorized_last frontmatter modifications
+⚡ Improve content validation and logging
+⚡ Add proper metadata extraction without modifications
+⏳ Queue Status Event System (In Progress)
+✅ Created QueueEvents model
+✅ Created EventEmitter service
+✅ StatusManager handling queue events (found in code)
+🔄 Improve QueueService event emission
+🔄 Complete main plugin event wiring
+⏳ Metadata Handling (NEW)
+🔄 Improve YAML frontmatter parsing
+🔄 Better handling of nested arrays in frontmatter
+🔄 Proper empty array preservation
+🔄 Enhanced logging of parsing decisions
+⏳ SyncFileManager (In Progress)
+✅ 20-second wait for file creation
+✅ 5-second wait after file creation
+🔄 Improve file existence checking
+🔄 Error recovery mechanisms
+🔄 Enhanced logging system
+🔄 Settings System Enhancement
 
-✅ Implement Sync Detection System
-- Created SyncDetectionManager
-- Added 5-second quiet period detection
-- Integrated with main plugin flow
+Add validation for exclusion patterns
+Add content processing thresholds
+Implement settings migration
+Add vector database configuration validation
 
-⏳ Enhance SyncFileManager (In Progress)
-- Implement 20-second wait for file creation
-- Add 5-second wait after file creation
-- Improve file existence checking
-- Enhance error recovery mechanisms
-- Add detailed logging
+Status of Previous Items:
 
-🔄 Update Sync Settings
-- Add configurable thresholds
-- Implement settings validation
-- Create settings migration system
+✅ Status Management System implementation
+✅ Sync Detection quiet periods
+✅ Basic sync file management
+⏳ Multi-Device sync (depends on above)
+🔄 Delta detection (needs sync system)
+🔄 Conflict resolution
 
-## Phase 2: Core Features
-### Multi-Device Sync 🔄
-1. Sync Status Checking
-- Design sync status data structure
-- Implement status checking logic
-- Add status validation system
+New Critical Notes:
 
-2. Device Identification
-- Create device ID generation
-- Implement device tracking
-- Add device validation
+All file operations must be read-only
+Vector status tracking belongs in database, not files
+Need better logging of processing decisions
+Content validation needs clear thresholds
+Metadata extraction needs improvement
+Error handling needs enhancement
+Database schema needs review
 
-3. Sync State Tracking
-- Design sync state schema
-- Implement state persistence
-- Add state recovery mechanisms
+Dependencies:
 
-4. File Locking Mechanism
-- Design locking protocol
-- Implement lock acquisition
-- Add lock timeout handling
-- Create lock recovery system
-
-5. Enhanced Status Reporting
-- Design detailed status format
-- Implement status updates
-- Add progress tracking
-- Create status history
-
-## Phase 3: Advanced Features
-### Delta Detection System 🔄
-1. Change Detection
-- Implement file diffing
-- Create change categorization
-- Add metadata comparison
-- Design partial update detection
-
-2. Diff Generation
-- Implement chunk-level diffing
-- Create efficient diff storage
-- Add diff compression
-- Design diff validation
-
-3. Smart Processing
-- Implement partial updates
-- Create update prioritization
-- Add batch processing
-- Design update optimization
-
-### Conflict Resolution 🔄
-1. Basic Resolution
-- Implement timestamp comparison
-- Create version tracking
-- Add conflict detection
-- Design resolution workflow
-
-2. Advanced Resolution
-- Implement merge strategies
-- Create conflict visualization
-- Add manual resolution UI
-- Design resolution history
-
-## Dependencies & Sequence
-1. Current Focus (⏳ In Progress)
-   - Complete SyncFileManager enhancements
-   - Implement remaining sync initialization features
-   - Add configuration options
-
-2. Next Steps
-   - Begin Multi-Device sync implementation
-   - Design device identification system
-   - Create sync state tracking
-
-3. Future Work
-   - Delta detection system
-   - Conflict resolution
-   - Advanced features
-
-## Critical Path
-1. ⏳ Complete Sync Initialization
-2. 🔄 Implement Multi-Device Sync
-3. 🔄 Add Delta Detection
-4. 🔄 Create Conflict Resolution
-
-## Notes
-- Status Management System is now handling plugin state ✅
-- Sync Detection is managing quiet periods ✅
-- SyncFileManager enhancements are next priority ⏳
-- Multi-Device sync depends on completed initialization
-- Delta detection requires stable sync system
-- Conflict resolution needs all previous systems
+Remove file modifications before enhancing sync
+Complete metadata extraction before delta detection
+Finish queue events before conflict resolution
+Complete sync manager before multi-device support
 
 Legend:
 ✅ Completed
 ⏳ In Progress
 🔄 Not Started
-⚡ High Priority
+⚡ Critical Priority
 
 Sanity check the code and the todo list to see if the the list is up to date.
 
