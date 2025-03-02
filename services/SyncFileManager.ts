@@ -475,7 +475,6 @@ export class SyncFileManager {
 			if (!this.currentSyncData) {
 				await this.readSyncFile();
 			}
-
 			if (this.currentSyncData) {
 				// Update device sync time
 				const updatedData = updateDeviceSyncTime(this.currentSyncData, this.deviceId);
@@ -488,51 +487,27 @@ export class SyncFileManager {
 	}
 
 	/**
-	 * Add pending file operation during offline mode
+	 * **New Method:**
+	 * Updates the sync status for a given file in the sync file.
+	 * This method is used as a fallback when the database isn't available.
 	 */
-	async addPendingOperation(
-		fileId: string,
-		operationType: 'create' | 'update' | 'delete' | 'rename',
-		metadata?: {
-			oldPath?: string;
-			contentHash?: string;
-			lastModified?: number;
+	async updateSyncStatus(filePath: string, status: string, additionalData: Record<string, any>): Promise<void> {
+		// Ensure we have the current sync data
+		if (!this.currentSyncData) {
+			await this.readSyncFile();
 		}
-	): Promise<void> {
-		try {
-			// Read current data if not cached
-			if (!this.currentSyncData) {
-				await this.readSyncFile();
-			}
-
-			if (this.currentSyncData) {
-				// Add pending operation
-				const pendingOperation = {
-					id: crypto.randomUUID(),
-					fileId,
-					operationType,
-					timestamp: Date.now(),
-					deviceId: this.deviceId,
-					metadata,
-					status: 'pending'
-				};
-
-				// Add to list
-				this.currentSyncData.pendingOperations.push(pendingOperation);
-
-				// Trim if needed
-				if (this.currentSyncData.pendingOperations.length > 100) {
-					this.currentSyncData.pendingOperations = this.currentSyncData.pendingOperations.slice(-100);
-				}
-
-				// Write updated data
-				await this.writeSyncFile(this.currentSyncData);
-			}
-		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.addPendingOperation',
-				metadata: { fileId, operationType }
-			});
+		if (this.currentSyncData) {
+			// Assuming your sync file header contains a fileStatuses map
+			this.currentSyncData.header.fileStatuses = this.currentSyncData.header.fileStatuses || {};
+			this.currentSyncData.header.fileStatuses[filePath] = {
+				status,
+				lastModified: additionalData.lastModified,
+				hash: additionalData.hash,
+				updatedAt: Date.now()
+			};
+			await this.writeSyncFile(this.currentSyncData);
+		} else {
+			throw new Error("Sync file data unavailable for updateSyncStatus");
 		}
 	}
 

@@ -326,16 +326,21 @@ export class FileTracker {
 		}
 	}
 
+
 	private shouldTrackFile(filePath: string): boolean {
+		// Extract the file name from the path
+		const fileName = filePath.split('/').pop()?.toLowerCase() || filePath.toLowerCase();
+
+		// Check against the sync file names
 		if (
-			filePath === this.syncFilePath ||
-			filePath.endsWith('_mindmatrixsync.md') ||
-			filePath.endsWith('_mindmatrixsync.md.backup')
+			fileName === '_mindmatrixsync.md' ||
+			fileName === '_mindmatrixsync.md.backup'
 		) {
 			return false;
 		}
 		return true;
 	}
+
 
 	/**
 	 * Retrieve sync status for a given file from the sync file.

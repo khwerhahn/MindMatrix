@@ -155,6 +155,7 @@ The plugin is designed to **treat user notes as immutable**. In earlier versions
 - **SyncFileManager.ts Updates**
   - Enhanced conflict detection and resolution strategies.
   - Added an alias for `validateSyncState()` to support legacy calls.
+  - **New:** Implemented an `updateSyncStatus` method to update file statuses in the sync file.
 - **FileTracker.ts Updates**
   - Improved handling of edge cases (renames, deletions) and integrated basic offline mode support with an optional OfflineQueueManager.
 - **StatusManager.ts Updates**
@@ -183,27 +184,26 @@ The plugin is designed to **treat user notes as immutable**. In earlier versions
 1. **Sync File Architecture Enhancements**
    - Refine conflict detection and resolution strategies (e.g., automated resolution based on timestamps and content hashes).
    - Enhance real-time connection state monitoring with corresponding UI updates.
-
 2. **Database-Based File Tracking Improvements**
    - Continue refining FileTracker and InitialSyncManager to fully rely on database status and handle edge cases (especially for file renames and deletions).
    - Optimize database queries (consider caching or bulk operations) to improve performance in large vaults.
    - Develop comprehensive unit and integration tests for database operations and state reconciliation.
-
 3. **Enhanced Metadata Integration**
    - Further improve metadata extraction in TextSplitter and MetadataExtractor.
    - Validate that merging metadata does not affect user file content.
    - Optionally enhance the embedding process by allowing external metadata to be prepended to text chunks.
-
 4. **Offline Mode Support**
    - Improve mechanisms to detect and handle offline scenarios.
    - Enhance the OfflineQueueManager reconciliation process.
    - Add detailed UI feedback (via StatusManager) to inform users about connectivity status and offline operation processing.
-
 5. **Queue Status Event System Enhancements**
    - Fine-tune event emissions in QueueService and further integrate with the EventEmitter.
    - Complete wiring of the main plugin event system to ensure real-time status updates are consistently delivered to the UI.
-
-6. **Code Quality and Maintainability Improvements**
+6. **Exclusion Logic for Sync File**
+   - **Problem:** The `_mindmatrixsync.md` file is still being processed, especially during initial sync.
+   - **Cause:** The current file exclusion logic in FileTracker does not filter out the sync file when retrieving all markdown files (e.g., via `vault.getMarkdownFiles()`).
+   - **Task:** Update the initial sync process to explicitly filter out the sync file and its backup (e.g., by comparing file names).
+7. **Code Quality and Maintainability Improvements**
    - Consider formalizing dependency injection for service instantiation to improve testability and service decoupling.
    - Separate complex service responsibilities (e.g., in SyncFileManager) into smaller, more focused modules.
    - Standardize naming conventions and increase inline documentation for clarity.
@@ -219,3 +219,5 @@ The plugin is designed to **treat user notes as immutable**. In earlier versions
 4. Enhance semantic search accuracy through richer metadata integration.
 5. Support efficient initial vault synchronization.
 6. Maintain consistent data across multiple devices while preserving user note integrity.
+
+---
