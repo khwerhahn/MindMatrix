@@ -1,26 +1,20 @@
 // src/services/SyncFileManager.ts
-
-import { TFile, Vault } from 'obsidian';
+import { TFile, Vault, parseYaml, stringifyYaml } from 'obsidian';
 import { ErrorHandler } from '../utils/ErrorHandler';
 import { DocumentProcessingError } from '../models/DocumentChunk';
-
-interface SyncState {
-	isValid: boolean;
-	error?: string;
-}
-
-interface SyncEntry {
-	filePath: string;
-	lastModified: number;
-	lastSynced: number;
-	hash: string;
-	status: 'OK' | 'PENDING' | 'ERROR';
-}
-
-interface SyncFileContent {
-	lastSync: number;
-	entries: SyncEntry[];
-}
+import {
+	SyncFileData,
+	SyncValidationResult,
+	SyncErrorType,
+	SyncState,
+	createEmptySyncFileData,
+	updateDeviceInSyncFile,
+	addConnectionEvent,
+	updateDatabaseStatus,
+	updateDeviceSyncTime,
+	trimSyncHistoryArrays,
+	SyncConflict
+} from '../models/SyncModels';
 
 export class SyncFileManager {
 	private syncFilePath: string;
@@ -28,120 +22,264 @@ export class SyncFileManager {
 	private lastBackup: number = 0;
 	private backupInterval: number;
 	private syncFile: TFile | null = null;
+	private currentSyncData: SyncFileData | null = null;
+	private vaultId: string;
+	private deviceId: string;
+	private deviceName: string;
+	private pluginVersion: string;
 
 	constructor(
 		private vault: Vault,
 		private errorHandler: ErrorHandler,
 		syncFilePath: string = '_mindmatrixsync.md',
-		backupInterval: number = 3600000 // 1 hour in milliseconds
+		backupInterval: number = 3600000, // 1 hour in milliseconds
+		vaultId: string,
+		deviceId: string,
+		deviceName: string,
+		pluginVersion: string
 	) {
 		this.syncFilePath = syncFilePath;
 		this.backupPath = `${syncFilePath}.backup`;
 		this.backupInterval = backupInterval;
+		this.vaultId = vaultId;
+		this.deviceId = deviceId;
+		this.deviceName = deviceName;
+		this.pluginVersion = pluginVersion;
 	}
 
 	/**
 	 * Initialize or validate the sync file
 	 */
-	async initialize(): Promise<void> {
+	async initialize(): Promise<SyncValidationResult> {
 		try {
 			// Check if sync file exists
 			const existingFile = this.vault.getAbstractFileByPath(this.syncFilePath);
-
 			if (existingFile instanceof TFile) {
 				this.syncFile = existingFile;
-				// Validate existing file
-				const isValid = await this.validateSyncFile();
-				if (!isValid) {
-					await this.repairSyncFile();
+				// Validate existing file and parse its contents
+				const validationResult = await this.validateSyncFile();
+				if (!validationResult.isValid) {
+					const recovered = await this.repairSyncFile();
+					if (!recovered) {
+						await this.createSyncFile();
+					}
 				}
 			} else {
 				// Create new sync file
 				await this.createSyncFile();
 			}
-
 			// Create initial backup
 			await this.createBackup();
+			return await this.validateSyncFile();
 		} catch (error) {
 			this.errorHandler.handleError(error, {
 				context: 'SyncFileManager.initialize',
 				metadata: { syncFilePath: this.syncFilePath }
 			});
-			throw error;
+			// Try to create a new file as a last resort
+			try {
+				await this.createSyncFile();
+				return { isValid: true };
+			} catch (createError) {
+				return {
+					isValid: false,
+					error: `Failed to initialize sync file: ${createError.message}`
+				};
+			}
 		}
 	}
 
 	/**
-	 * Create a new sync file with initial structure
+	 * Create a new sync file with the new structure
 	 */
 	private async createSyncFile(): Promise<void> {
 		console.log('Starting sync file creation with wait periods...');
-		const initialContent = this.generateInitialContent();
+		// First check if the file exists and try to delete it
+		const existingFile = this.vault.getAbstractFileByPath(this.syncFilePath);
+		if (existingFile instanceof TFile) {
+			try {
+				console.log('Existing sync file found, removing before recreation');
+				await this.vault.delete(existingFile);
+				// Small delay after deletion
+				await new Promise(resolve => setTimeout(resolve, 500));
+			} catch (deleteError) {
+				console.warn('Failed to delete existing sync file:', deleteError);
+				// Continue anyway, we'll try to overwrite it
+			}
+		}
 
-		// First wait period - 20 seconds before creation
-		console.log('Waiting 20 seconds before creating sync file...');
-		await new Promise(resolve => setTimeout(resolve, 20000));
-
-		// Create the file
-		this.syncFile = await this.vault.create(this.syncFilePath, initialContent);
+		// Create new sync data
+		this.currentSyncData = createEmptySyncFileData(
+			this.vaultId,
+			this.deviceId,
+			this.deviceName,
+			this.pluginVersion
+		);
+		// Generate initial content
+		const initialContent = this.generateSyncFileContent(this.currentSyncData);
+		// First wait period - 2 seconds before creation to avoid races with Obsidian sync
+		console.log('Waiting 2 seconds before creating sync file...');
+		await new Promise(resolve => setTimeout(resolve, 2000));
+		try {
+			// Try to create the file
+			this.syncFile = await this.vault.create(this.syncFilePath, initialContent);
+		} catch (createError) {
+			// If creation fails, try to modify it instead (might already exist)
+			console.log('Failed to create sync file, trying to modify existing:', createError);
+			const existingFile = this.vault.getAbstractFileByPath(this.syncFilePath);
+			if (existingFile instanceof TFile) {
+				this.syncFile = existingFile;
+				await this.vault.modify(existingFile, initialContent);
+			} else {
+				throw new Error(`Failed to create or modify sync file: ${createError.message}`);
+			}
+		}
 		console.log('Sync file created, starting stability wait period...');
-
-		// Second wait period - 5 seconds after creation
-		await new Promise(resolve => setTimeout(resolve, 5000));
-
+		// Second wait period - 1 second after creation
+		await new Promise(resolve => setTimeout(resolve, 1000));
 		// Verify file exists and is readable
 		const fileExists = this.vault.getAbstractFileByPath(this.syncFilePath);
 		if (!fileExists) {
-			throw new Error('Sync file creation failed - file not found after wait period');
+			throw this.errorHandler.handleSyncError(
+				SyncErrorType.SYNC_FILE_MISSING,
+				'Sync file creation failed - file not found after wait period',
+				{ context: 'SyncFileManager.createSyncFile' },
+				undefined,
+				this.deviceId,
+				false
+			);
 		}
-
 		console.log('Sync file creation completed successfully');
 	}
 
 	/**
-	 * Generate initial content for sync file
+	 * Generate sync file content from data
 	 */
-	private generateInitialContent(): string {
-		return `---
-last_sync: ${Date.now()}
----
-
-## Synced Files
-| File Path | Last Modified | Last Synced | Hash | Status |
-|-----------|--------------|-------------|------|--------|
-`;
+	private generateSyncFileContent(data: SyncFileData): string {
+		// Convert data to YAML using Obsidian's built-in function
+		const yamlContent = stringifyYaml(data);
+		// Return as markdown with YAML front matter
+		return `---\n${yamlContent}---\n\n## Mind Matrix Sync File\n\nThis file manages cross-device coordination for the Mind Matrix plugin.\nDo not modify this file manually.\n`;
 	}
 
 	/**
 	 * Validate sync file structure and content
 	 */
-	private async validateSyncFile(): Promise<boolean> {
-		if (!this.syncFile) return false;
+	async validateSyncFile(): Promise<SyncValidationResult> {
+		if (!this.syncFile) {
+			return {
+				isValid: false,
+				error: 'Sync file not initialized'
+			};
+		}
 
 		try {
 			const content = await this.vault.read(this.syncFile);
-
-			// Check basic structure
-			const hasYamlFrontmatter = /^---\n[\s\S]*?\n---/.test(content);
-			const hasTableHeader = content.includes('| File Path | Last Modified | Last Synced | Hash | Status |');
-			const hasTableDelimiter = content.includes('|-----------|--------------|-------------|------|--------|');
-
-			if (!hasYamlFrontmatter || !hasTableHeader || !hasTableDelimiter) {
-				return false;
+			// Extract YAML front matter
+			const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
+			if (!yamlMatch) {
+				console.log('Invalid sync file format: Missing YAML front matter. Will recreate file.');
+				// Instead of just returning an error, recreate the file
+				await this.createSyncFile();
+				return { isValid: true };
 			}
-
-			// Parse and validate entries
-			const entries = await this.parseSyncFile();
-			for (const entry of entries) {
-				if (!this.validateEntry(entry)) {
-					return false;
-				}
+			// Parse YAML content using Obsidian's built-in function
+			const yamlContent = yamlMatch[1];
+			let parsedData;
+			try {
+				parsedData = parseYaml(yamlContent);
+			} catch (parseError) {
+				console.log('Failed to parse YAML content:', parseError);
+				// If parsing fails, recreate the file
+				await this.createSyncFile();
+				return { isValid: true };
 			}
+			// Validate basic structure
+			if (!parsedData || typeof parsedData !== 'object') {
+				console.log('Invalid sync file format: Cannot parse YAML content. Will recreate file.');
+				await this.createSyncFile();
+				return { isValid: true };
+			}
+			// Check if this is an old format sync file (has a table structure)
+			if (content.includes('| File Path | Last Modified |')) {
+				console.log('Detected old format sync file. Will convert to new format.');
+				await this.createSyncFile();
+				return { isValid: true };
+			}
+			// Check required fields
+			if (
+				!parsedData.header ||
+				!parsedData.header.vaultId ||
+				!parsedData.header.lastGlobalSync ||
+				!parsedData.header.devices
+			) {
+				console.log('Invalid sync file format: Missing required fields. Will recreate file.');
+				await this.createSyncFile();
+				return { isValid: true };
+			}
+			// Verify vault ID matches
+			if (parsedData.header.vaultId !== this.vaultId) {
+				console.log('Vault ID mismatch. Old ID:', parsedData.header.vaultId, 'New ID:', this.vaultId);
+				// Update the vault ID to match the current one
+				parsedData.header.vaultId = this.vaultId;
+			}
+			// Store the parsed data
+			this.currentSyncData = parsedData as SyncFileData;
+			// Ensure all required properties exist in the data structure
+			if (!this.currentSyncData.connectionEvents) this.currentSyncData.connectionEvents = [];
+			if (!this.currentSyncData.pendingOperations) this.currentSyncData.pendingOperations = [];
+			if (!this.currentSyncData.conflicts) this.currentSyncData.conflicts = [];
+			if (!this.currentSyncData.lastDatabaseCheck) this.currentSyncData.lastDatabaseCheck = Date.now();
+			if (!this.currentSyncData.databaseStatus) this.currentSyncData.databaseStatus = 'unknown';
+			// Update device information
+			this.currentSyncData = updateDeviceInSyncFile(
+				this.currentSyncData,
+				this.deviceId,
+				this.deviceName,
+				this.pluginVersion
+			);
+			// Write back the updated data
+			await this.writeSyncFile(this.currentSyncData);
+			return { isValid: true };
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.validateSyncFile' });
+			console.log('Failed to validate sync file, will recreate:', error);
+			// Try to recreate the file as a last resort
+			try {
+				await this.createSyncFile();
+				return { isValid: true };
+			} catch (createError) {
+				return {
+					isValid: false,
+					error: `Failed to validate and recreate sync file: ${createError.message}`
+				};
+			}
+		}
+	}
 
+	/**
+	 * Alias for validateSyncFile() to support legacy calls.
+	 */
+	async validateSyncState(): Promise<SyncValidationResult> {
+		return await this.validateSyncFile();
+	}
+
+	/**
+	 * Repair corrupted sync file
+	 */
+	private async repairSyncFile(): Promise<boolean> {
+		try {
+			// Try to restore from backup first
+			const restored = await this.restoreFromBackup();
+			if (restored) {
+				return true;
+			}
+			// If restoration fails, create new sync file
+			await this.createSyncFile();
 			return true;
 		} catch (error) {
 			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.validateSyncFile',
+				context: 'SyncFileManager.repairSyncFile',
 				metadata: { syncFilePath: this.syncFilePath }
 			});
 			return false;
@@ -149,147 +287,94 @@ last_sync: ${Date.now()}
 	}
 
 	/**
-	 * Validate a single sync entry
+	 * Read and parse the sync file
 	 */
-	private validateEntry(entry: SyncEntry): boolean {
-		return (
-			typeof entry.filePath === 'string' &&
-			typeof entry.lastModified === 'number' &&
-			typeof entry.lastSynced === 'number' &&
-			typeof entry.hash === 'string' &&
-			['OK', 'PENDING', 'ERROR'].includes(entry.status)
-		);
-	}
+	async readSyncFile(): Promise<SyncFileData | null> {
+		if (!this.syncFile) {
+			throw this.errorHandler.handleSyncError(
+				SyncErrorType.SYNC_FILE_MISSING,
+				'Sync file not initialized',
+				{ context: 'SyncFileManager.readSyncFile' },
+				undefined,
+				this.deviceId
+			);
+		}
 
-	/**
-	 * Repair corrupted sync file
-	 */
-	private async repairSyncFile(): Promise<void> {
 		try {
-			// Try to restore from backup first
-			const restored = await this.restoreFromBackup();
-			if (!restored) {
-				// If restoration fails, create new sync file
-				await this.createSyncFile();
+			const content = await this.vault.read(this.syncFile);
+			// Extract YAML front matter
+			const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
+			if (!yamlMatch) {
+				throw this.errorHandler.handleSyncError(
+					SyncErrorType.SYNC_FILE_CORRUPT,
+					'Invalid sync file format: Missing YAML front matter',
+					{ context: 'SyncFileManager.readSyncFile' },
+					undefined,
+					this.deviceId
+				);
 			}
+			// Parse YAML content using Obsidian's built-in function
+			const yamlContent = yamlMatch[1];
+			const parsedData = parseYaml(yamlContent) as SyncFileData;
+			if (!parsedData || !parsedData.header) {
+				throw this.errorHandler.handleSyncError(
+					SyncErrorType.SYNC_FILE_CORRUPT,
+					'Invalid sync file format: Missing required fields',
+					{ context: 'SyncFileManager.readSyncFile' },
+					undefined,
+					this.deviceId
+				);
+			}
+			// Cache the parsed data
+			this.currentSyncData = parsedData;
+			return parsedData;
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.repairSyncFile',
-				metadata: { syncFilePath: this.syncFilePath }
-			});
+			if (!this.errorHandler.isSyncError(error)) {
+				throw this.errorHandler.handleSyncError(
+					SyncErrorType.SYNC_FILE_CORRUPT,
+					`Error reading sync file: ${error.message}`,
+					{ context: 'SyncFileManager.readSyncFile' },
+					undefined,
+					this.deviceId
+				);
+			}
 			throw error;
 		}
 	}
 
 	/**
-	 * Parse sync file content
+	 * Write sync data to the sync file
 	 */
-	private async parseSyncFile(): Promise<SyncEntry[]> {
+	async writeSyncFile(data: SyncFileData): Promise<void> {
 		if (!this.syncFile) {
-			throw new Error(DocumentProcessingError.SYNC_ERROR);
+			throw this.errorHandler.handleSyncError(
+				SyncErrorType.SYNC_FILE_MISSING,
+				'Sync file not initialized',
+				{ context: 'SyncFileManager.writeSyncFile' },
+				undefined,
+				this.deviceId
+			);
 		}
 
-		const content = await this.vault.read(this.syncFile);
-		const lines = content.split('\n');
-		const entries: SyncEntry[] = [];
-
-		let tableStartIndex = -1;
-		for (let i = 0; i < lines.length; i++) {
-			if (lines[i].includes('| File Path | Last Modified |')) {
-				tableStartIndex = i + 2; // Skip header and delimiter
-				break;
-			}
-		}
-
-		if (tableStartIndex === -1) {
-			throw new Error('Invalid sync file format');
-		}
-
-		for (let i = tableStartIndex; i < lines.length; i++) {
-			const line = lines[i].trim();
-			if (!line || line.startsWith('#')) continue;
-
-			const parts = line.split('|').map(part => part.trim());
-			if (parts.length >= 6) {
-				entries.push({
-					filePath: parts[1],
-					lastModified: parseInt(parts[2]),
-					lastSynced: parseInt(parts[3]),
-					hash: parts[4],
-					status: parts[5] as 'OK' | 'PENDING' | 'ERROR'
-				});
-			}
-		}
-
-		return entries;
-	}
-
-	/**
-	 * Update sync status for a file
-	 */
-	async updateSyncStatus(
-		filePath: string,
-		status: 'OK' | 'PENDING' | 'ERROR',
-		metadata: { lastModified: number; hash: string }
-	): Promise<void> {
 		try {
-			if (!this.syncFile) {
-				throw new Error('Sync file not initialized');
-			}
-
-			const entries = await this.parseSyncFile();
-			const existingEntryIndex = entries.findIndex(e => e.filePath === filePath);
-			const newEntry: SyncEntry = {
-				filePath,
-				lastModified: metadata.lastModified,
-				lastSynced: Date.now(),
-				hash: metadata.hash,
-				status
-			};
-
-			if (existingEntryIndex >= 0) {
-				entries[existingEntryIndex] = newEntry;
-			} else {
-				entries.push(newEntry);
-			}
-
-			await this.writeSyncFile(entries);
-
+			// Update sync file content
+			const content = this.generateSyncFileContent(data);
+			await this.vault.modify(this.syncFile, content);
+			// Update cached data
+			this.currentSyncData = data;
 			// Create backup if needed
 			if (Date.now() - this.lastBackup >= this.backupInterval) {
 				await this.createBackup();
 			}
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.updateSyncStatus',
-				metadata: { filePath, status }
-			});
-			throw error;
+			throw this.errorHandler.handleSyncError(
+				SyncErrorType.UNKNOWN_ERROR,
+				`Failed to write sync file: ${error.message}`,
+				{ context: 'SyncFileManager.writeSyncFile' },
+				undefined,
+				this.deviceId
+			);
 		}
-	}
-
-	/**
-	 * Write entries to sync file
-	 */
-	private async writeSyncFile(entries: SyncEntry[]): Promise<void> {
-		if (!this.syncFile) {
-			throw new Error('Sync file not initialized');
-		}
-
-		const header = `---
-last_sync: ${Date.now()}
----
-
-## Synced Files
-| File Path | Last Modified | Last Synced | Hash | Status |
-|-----------|--------------|-------------|------|--------|
-`;
-
-		const content = entries
-			.map(entry => `| ${entry.filePath} | ${entry.lastModified} | ${entry.lastSynced} | ${entry.hash} | ${entry.status} |`)
-			.join('\n');
-
-		await this.vault.modify(this.syncFile, header + content);
 	}
 
 	/**
@@ -301,18 +386,14 @@ last_sync: ${Date.now()}
 		try {
 			const content = await this.vault.read(this.syncFile);
 			const backupFile = this.vault.getAbstractFileByPath(this.backupPath);
-
 			if (backupFile instanceof TFile) {
 				await this.vault.modify(backupFile, content);
 			} else {
 				await this.vault.create(this.backupPath, content);
 			}
-
 			this.lastBackup = Date.now();
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.createBackup'
-			});
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.createBackup' });
 		}
 	}
 
@@ -332,128 +413,288 @@ last_sync: ${Date.now()}
 			} else {
 				this.syncFile = await this.vault.create(this.syncFilePath, content);
 			}
-			return true;
+			// Try to parse the restored content
+			const validationResult = await this.validateSyncFile();
+			return validationResult.isValid;
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.restoreFromBackup'
-			});
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.restoreFromBackup' });
 			return false;
 		}
 	}
 
 	/**
-	 * Get sync status for a file
+	 * Update the database connection status
 	 */
-	async getSyncStatus(filePath: string): Promise<SyncEntry | null> {
+	async updateDatabaseStatus(status: 'available' | 'unavailable' | 'unknown'): Promise<void> {
 		try {
-			const entries = await this.parseSyncFile();
-			return entries.find(e => e.filePath === filePath) || null;
+			// Read current data if not cached
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+
+			if (this.currentSyncData) {
+				// Update status
+				const updatedData = updateDatabaseStatus(this.currentSyncData, status);
+				// If status changed to unavailable, add connection event
+				if (status === 'unavailable' && this.currentSyncData.databaseStatus !== 'unavailable') {
+					updatedData.connectionEvents.push({
+						timestamp: Date.now(),
+						eventType: 'disconnected',
+						deviceId: this.deviceId,
+						details: 'Database connection lost'
+					});
+				}
+				// If status changed to available, add connection event
+				if (status === 'available' && this.currentSyncData.databaseStatus !== 'available') {
+					updatedData.connectionEvents.push({
+						timestamp: Date.now(),
+						eventType: 'connected',
+						deviceId: this.deviceId,
+						details: 'Database connection established'
+					});
+				}
+				// Trim arrays to prevent excessive growth
+				const trimmedData = trimSyncHistoryArrays(updatedData);
+				// Write updated data
+				await this.writeSyncFile(trimmedData);
+			}
 		} catch (error) {
 			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.getSyncStatus',
-				metadata: { filePath }
+				context: 'SyncFileManager.updateDatabaseStatus',
+				metadata: { status }
 			});
-			return null;
 		}
 	}
 
 	/**
-	 * Get all sync entries
+	 * Update device sync timestamp and status
 	 */
-	async getAllSyncEntries(): Promise<SyncEntry[]> {
+	async updateDeviceSyncTimestamp(): Promise<void> {
 		try {
-			return await this.parseSyncFile();
+			// Read current data if not cached
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+
+			if (this.currentSyncData) {
+				// Update device sync time
+				const updatedData = updateDeviceSyncTime(this.currentSyncData, this.deviceId);
+				// Write updated data
+				await this.writeSyncFile(updatedData);
+			}
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.updateDeviceSyncTimestamp' });
+		}
+	}
+
+	/**
+	 * Add pending file operation during offline mode
+	 */
+	async addPendingOperation(
+		fileId: string,
+		operationType: 'create' | 'update' | 'delete' | 'rename',
+		metadata?: {
+			oldPath?: string;
+			contentHash?: string;
+			lastModified?: number;
+		}
+	): Promise<void> {
+		try {
+			// Read current data if not cached
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+
+			if (this.currentSyncData) {
+				// Add pending operation
+				const pendingOperation = {
+					id: crypto.randomUUID(),
+					fileId,
+					operationType,
+					timestamp: Date.now(),
+					deviceId: this.deviceId,
+					metadata,
+					status: 'pending'
+				};
+
+				// Add to list
+				this.currentSyncData.pendingOperations.push(pendingOperation);
+
+				// Trim if needed
+				if (this.currentSyncData.pendingOperations.length > 100) {
+					this.currentSyncData.pendingOperations = this.currentSyncData.pendingOperations.slice(-100);
+				}
+
+				// Write updated data
+				await this.writeSyncFile(this.currentSyncData);
+			}
 		} catch (error) {
 			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.getAllSyncEntries'
+				context: 'SyncFileManager.addPendingOperation',
+				metadata: { fileId, operationType }
 			});
+		}
+	}
+
+	/**
+	 * Get all pending operations
+	 */
+	async getPendingOperations(): Promise<Array<{
+		id: string;
+		fileId: string;
+		operationType: string;
+		timestamp: number;
+		deviceId: string;
+		metadata?: any;
+		status: string;
+	}>> {
+		try {
+			// Read current data if not cached
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+			return this.currentSyncData?.pendingOperations || [];
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.getPendingOperations' });
 			return [];
 		}
 	}
 
-	async validateSyncState(): Promise<SyncState> {
+	/**
+	 * Get current sync state
+	 */
+	async getSyncState(): Promise<SyncState> {
 		try {
-			if (!this.syncFile) {
-				return {
-					isValid: false,
-					error: 'Sync file not initialized'
-				};
+			// Read current data if not cached
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
 			}
-
-			const content = await this.vault.read(this.syncFile);
-
-			// Check basic structure
-			const hasYamlFrontmatter = /^---\n[\s\S]*?\n---/.test(content);
-			const hasTableHeader = content.includes('| File Path | Last Modified | Last Synced | Hash | Status |');
-			const hasTableDelimiter = content.includes('|-----------|--------------|-------------|------|--------|');
-
-			if (!hasYamlFrontmatter || !hasTableHeader || !hasTableDelimiter) {
-				return {
-					isValid: false,
-					error: 'Invalid sync file structure'
-				};
-			}
-
-			// Parse and validate entries
-			const entries = await this.parseSyncFile();
-			for (const entry of entries) {
-				if (!this.validateEntry(entry)) {
-					return {
-						isValid: false,
-						error: 'Invalid sync entry found'
-					};
-				}
-			}
-
-			return { isValid: true };
+			return this.currentSyncData?.header.syncState || SyncState.UNKNOWN;
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.validateSyncState'
-			});
-			return {
-				isValid: false,
-				error: error.message
-			};
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.getSyncState' });
+			return SyncState.UNKNOWN;
 		}
 	}
 
-	async attemptRecovery(): Promise<boolean> {
+	/**
+	 * Get information about all known devices
+	 */
+	async getKnownDevices(): Promise<Record<string, {
+		deviceId: string;
+		name: string;
+		platform: string;
+		lastSeen: number;
+		lastSyncTime: number;
+	}>> {
 		try {
-			// Try to restore from backup first
-			const restored = await this.restoreFromBackup();
-			if (restored) {
-				return true;
+			// Read current data if not cached
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
 			}
+			return this.currentSyncData?.header.devices || {};
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.getKnownDevices' });
+			return {};
+		}
+	}
 
-			// If restoration fails, create new sync file
-			await this.createSyncFile();
+	/**
+	 * Check if there are conflicts that need resolution
+	 */
+	async detectConflicts(): Promise<SyncConflict[]> {
+		try {
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+			// Enhanced: Filter for conflicts with more detailed metadata (if needed)
+			const pendingConflicts = this.currentSyncData?.conflicts.filter(
+				conflict => conflict.resolutionStatus === 'pending'
+			) || [];
+			return pendingConflicts;
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.detectConflicts' });
+			return [];
+		}
+	}
+
+	/**
+	 * Attempt to resolve a conflict based on a given resolution strategy.
+	 * Supports strategies:
+	 * - "newest-wins": Automatically resolves by favoring the most recent update.
+	 * - "keep-both": Marks as resolved and leaves both versions intact.
+	 * - "manual": Flags the conflict for manual intervention (does not auto-resolve).
+	 */
+	async resolveConflict(conflictId: string, resolutionStrategy: 'newest-wins' | 'manual' | 'keep-both'): Promise<boolean> {
+		try {
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+			// Find the conflict by ID
+			const conflictIndex = this.currentSyncData?.conflicts.findIndex(c => c.id === conflictId);
+			if (conflictIndex === undefined || conflictIndex < 0) {
+				console.warn('Conflict not found:', conflictId);
+				return false;
+			}
+			const conflict = this.currentSyncData!.conflicts[conflictIndex];
+			switch (resolutionStrategy) {
+				case 'newest-wins':
+					// In a real scenario, compare timestamps or content hashes here.
+					conflict.resolutionStrategy = 'newest-wins';
+					conflict.resolutionStatus = 'resolved';
+					conflict.resolvedAt = Date.now();
+					conflict.resolvedBy = this.deviceId;
+					break;
+				case 'keep-both':
+					// Optionally, duplicate the file entry in the database and mark conflict as resolved.
+					conflict.resolutionStrategy = 'keep-both';
+					conflict.resolutionStatus = 'resolved';
+					conflict.resolvedAt = Date.now();
+					conflict.resolvedBy = this.deviceId;
+					break;
+				case 'manual':
+					// Do not auto-resolve; flag for manual intervention.
+					conflict.resolutionStrategy = 'manual';
+					console.log('Manual resolution required for conflict:', conflictId);
+					return false;
+				default:
+					throw new Error('Unsupported resolution strategy');
+			}
+			await this.writeSyncFile(this.currentSyncData!);
 			return true;
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.attemptRecovery'
-			});
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.resolveConflict', metadata: { conflictId } });
 			return false;
 		}
 	}
 
+	/**
+	 * Attempt to resolve all detected conflicts using a default strategy.
+	 */
+	async resolveAllConflicts(defaultStrategy: 'newest-wins' | 'manual' | 'keep-both' = 'newest-wins'): Promise<void> {
+		try {
+			const conflicts = await this.detectConflicts();
+			for (const conflict of conflicts) {
+				await this.resolveConflict(conflict.id, defaultStrategy);
+			}
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.resolveAllConflicts' });
+		}
+	}
+
+	/**
+	 * Update the last sync timestamp in the sync file header.
+	 */
 	async updateLastSync(): Promise<void> {
 		try {
-			if (!this.syncFile) {
-				throw new Error('Sync file not initialized');
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
 			}
-
-			const content = await this.vault.read(this.syncFile);
-			const updatedContent = content.replace(
-				/^---\nlast_sync: \d+/m,
-				`---\nlast_sync: ${Date.now()}`
-			);
-
-			await this.vault.modify(this.syncFile, updatedContent);
+			if (this.currentSyncData) {
+				this.currentSyncData.header.lastGlobalSync = Date.now();
+				await this.writeSyncFile(this.currentSyncData);
+			}
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'SyncFileManager.updateLastSync'
-			});
-			throw error;
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.updateLastSync' });
 		}
 	}
 }

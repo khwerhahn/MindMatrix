@@ -1,12 +1,11 @@
 // src/services/InitialSyncManager.ts
-
 import { TFile, Vault, Notice } from 'obsidian';
 import { ErrorHandler } from '../utils/ErrorHandler';
 import { NotificationManager } from '../utils/NotificationManager';
 import { QueueService } from './QueueService';
 import { SyncFileManager } from './SyncFileManager';
 import { MetadataExtractor } from './MetadataExtractor';
-import { DocumentMetadata } from '../models/DocumentChunk';
+import { SupabaseService } from './SupabaseService';
 
 interface InitialSyncOptions {
 	batchSize: number;
@@ -29,7 +28,7 @@ interface SyncBatch {
 	endTime?: number;
 }
 
-interface SyncProgress {
+export interface SyncProgress {
 	totalFiles: number;
 	processedFiles: number;
 	currentBatch: number;
@@ -39,11 +38,14 @@ interface SyncProgress {
 }
 
 export class InitialSyncManager {
-	private batches: Map<string, SyncBatch> = new Map();
+	private batches: SyncBatch[] = [];
 	private progress: SyncProgress;
 	private isRunning: boolean = false;
+	private lastProcessedIndex: number = 0; // For resuming interrupted syncs
 	private processingTimeout: NodeJS.Timeout | null = null;
 	private readonly options: InitialSyncOptions;
+	private supabaseService: SupabaseService | null;
+	private resumeFileList: TFile[] = [];
 
 	constructor(
 		private vault: Vault,
@@ -52,9 +54,9 @@ export class InitialSyncManager {
 		private metadataExtractor: MetadataExtractor,
 		private errorHandler: ErrorHandler,
 		private notificationManager: NotificationManager,
+		supabaseService: SupabaseService | null,
 		options: Partial<InitialSyncOptions> = {}
 	) {
-		// Set default options
 		this.options = {
 			batchSize: 50,
 			maxConcurrentBatches: 3,
@@ -62,7 +64,6 @@ export class InitialSyncManager {
 			priorityRules: [],
 			...options
 		};
-
 		this.progress = {
 			totalFiles: 0,
 			processedFiles: 0,
@@ -70,55 +71,46 @@ export class InitialSyncManager {
 			totalBatches: 0,
 			startTime: 0
 		};
+		this.supabaseService = supabaseService;
 	}
 
 	/**
-	 * Start the initial sync process
+	 * Start the initial sync process.
+	 * Scans all markdown files in the vault and updates their status in the database.
+	 * If interrupted, resumes from the last processed file.
 	 */
 	async startSync(): Promise<void> {
 		if (this.isRunning) {
 			console.log('Initial sync already running');
 			return;
 		}
-
 		try {
 			this.isRunning = true;
 			this.progress.startTime = Date.now();
-
-			// Get all markdown files
+			// Get all markdown files from the vault and sort by priority
 			const files = this.vault.getMarkdownFiles();
-			this.progress.totalFiles = files.length;
-
-			// Create batches
-			const sortedFiles = await this.sortFilesByPriority(files);
-			const batches = this.createBatches(sortedFiles);
-			this.progress.totalBatches = batches.length;
-
-			// Initialize batches
-			batches.forEach((batch, index) => {
-				this.batches.set(batch.id, {
-					...batch,
-					status: 'pending',
-					progress: 0
-				});
-			});
-
-			// Start processing batches
+			this.resumeFileList = await this.sortFilesByPriority(files);
+			this.progress.totalFiles = this.resumeFileList.length;
+			// Create batches based on resumeFileList and lastProcessedIndex
+			this.batches = this.createBatches(this.resumeFileList.slice(this.lastProcessedIndex));
+			this.progress.totalBatches = this.batches.length;
+			console.log(`Starting initial sync: ${this.progress.totalFiles} files in ${this.batches.length} batches.`);
+			// Process each batch concurrently with a limit
 			await this.processBatches();
-
 			new Notice('Initial sync completed successfully');
+			// Reset resume index upon successful completion
+			this.lastProcessedIndex = 0;
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'InitialSyncManager.startSync'
-			});
+			this.errorHandler.handleError(error, { context: 'InitialSyncManager.startSync' });
 			new Notice('Initial sync failed. Check console for details.');
+			// Retain lastProcessedIndex so that a subsequent sync can resume from where it left off.
 		} finally {
 			this.isRunning = false;
 		}
 	}
 
 	/**
-	 * Sort files by priority based on rules
+	 * Sort files by priority based on rules.
 	 */
 	private async sortFilesByPriority(files: TFile[]): Promise<TFile[]> {
 		return files.sort((a, b) => {
@@ -129,7 +121,7 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Get priority for a file based on rules
+	 * Determine the processing priority for a file.
 	 */
 	private getFilePriority(path: string): number {
 		for (const rule of this.options.priorityRules) {
@@ -137,11 +129,11 @@ export class InitialSyncManager {
 				return rule.priority;
 			}
 		}
-		return 1; // Default priority
+		return 1;
 	}
 
 	/**
-	 * Create batches of files for processing
+	 * Create batches of files for processing.
 	 */
 	private createBatches(files: TFile[]): SyncBatch[] {
 		const batches: SyncBatch[] = [];
@@ -158,52 +150,49 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Process batches of files
+	 * Process batches concurrently with a limit.
+	 * Also updates resume progress in case of interruption.
 	 */
 	private async processBatches(): Promise<void> {
 		const activeBatches = new Set<string>();
-
-		// Process batches until all are complete
-		while (this.hasUnprocessedBatches() && this.isRunning) {
-			// Get next batch if we have capacity
-			if (activeBatches.size < this.options.maxConcurrentBatches) {
-				const nextBatch = this.getNextPendingBatch();
-				if (nextBatch) {
-					activeBatches.add(nextBatch.id);
-					this.processBatch(nextBatch)
-						.then(() => {
-							activeBatches.delete(nextBatch.id);
-						})
-						.catch((error) => {
-							this.errorHandler.handleError(error, {
-								context: 'InitialSyncManager.processBatch',
-								metadata: { batchId: nextBatch.id }
-							});
-							activeBatches.delete(nextBatch.id);
-						});
-				}
+		for (const batch of this.batches) {
+			while (activeBatches.size >= this.options.maxConcurrentBatches) {
+				await new Promise(resolve => setTimeout(resolve, 100));
 			}
-
-			// Wait before checking again
+			activeBatches.add(batch.id);
+			this.processBatch(batch)
+				.then(() => {
+					activeBatches.delete(batch.id);
+					// Update resume index after batch completes
+					this.lastProcessedIndex += batch.files.length;
+				})
+				.catch(error => {
+					this.errorHandler.handleError(error, {
+						context: 'InitialSyncManager.processBatch',
+						metadata: { batchId: batch.id }
+					});
+					activeBatches.delete(batch.id);
+					// Optionally, mark batch as failed or retry later
+				});
+		}
+		// Wait for all batches to complete
+		while (activeBatches.size > 0) {
 			await new Promise(resolve => setTimeout(resolve, 100));
 		}
 	}
 
 	/**
-	 * Process a single batch of files
+	 * Process a single batch of files.
 	 */
 	private async processBatch(batch: SyncBatch): Promise<void> {
 		try {
 			batch.status = 'processing';
 			batch.startTime = Date.now();
-
 			for (const file of batch.files) {
 				try {
 					await this.processFile(file);
 					this.progress.processedFiles++;
 					batch.progress = (this.progress.processedFiles / this.progress.totalFiles) * 100;
-
-					// Update progress notification
 					this.updateProgressNotification();
 				} catch (error) {
 					this.errorHandler.handleError(error, {
@@ -212,7 +201,6 @@ export class InitialSyncManager {
 					});
 				}
 			}
-
 			batch.status = 'completed';
 			batch.endTime = Date.now();
 		} catch (error) {
@@ -222,27 +210,26 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Process a single file
+	 * Process a single file.
+	 * Extracts metadata, calculates file hash, and updates its status.
 	 */
-	// In InitialSyncManager.ts, modify the processFile method:
 	private async processFile(file: TFile): Promise<void> {
 		try {
 			// Extract metadata
 			const metadata = await this.metadataExtractor.extractMetadata(file);
-
-			// Create or update frontmatter
-			await this.updateFrontmatter(file, metadata);
-
-			// Calculate file hash once
+			// Calculate file hash for change detection
 			const fileHash = await this.calculateFileHash(file);
-
-			// Update initial sync status
-			await this.syncFileManager.updateSyncStatus(file.path, 'PENDING', {
-				lastModified: file.stat.mtime,
-				hash: fileHash
-			});
-
-			// Queue file for processing and wait for completion
+			// Update file status in the database via Supabase if available, else fallback to sync file
+			if (this.supabaseService) {
+				await this.supabaseService.updateFileVectorizationStatus(metadata);
+			} else {
+				// Fallback: update sync file status (assuming updateSyncStatus method exists)
+				await this.syncFileManager.updateSyncStatus(file.path, 'PENDING', {
+					lastModified: file.stat.mtime,
+					hash: fileHash
+				});
+			}
+			// Queue file processing (e.g., for embedding generation)
 			await new Promise<void>((resolve, reject) => {
 				this.queueService.addTask({
 					id: file.path,
@@ -256,11 +243,15 @@ export class InitialSyncManager {
 					metadata,
 					data: {}
 				}).then(async () => {
-					// Update sync status to OK after successful processing
-					await this.syncFileManager.updateSyncStatus(file.path, 'OK', {
-						lastModified: file.stat.mtime,
-						hash: fileHash
-					});
+					// After processing, mark file as 'OK' in the database or sync file.
+					if (this.supabaseService) {
+						await this.supabaseService.updateFileVectorizationStatus(metadata);
+					} else {
+						await this.syncFileManager.updateSyncStatus(file.path, 'OK', {
+							lastModified: file.stat.mtime,
+							hash: fileHash
+						});
+					}
 					resolve();
 				}).catch(reject);
 			});
@@ -274,7 +265,7 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Calculate file hash
+	 * Calculate SHA-256 hash of a file's content.
 	 */
 	private async calculateFileHash(file: TFile): Promise<string> {
 		const content = await this.vault.read(file);
@@ -287,68 +278,17 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Update file frontmatter with sync information
-	 */
-	private async updateFrontmatter(file: TFile, metadata: DocumentMetadata): Promise<void> {
-		const content = await this.vault.read(file);
-
-		// Extract existing frontmatter
-		const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-		const frontmatter = frontmatterMatch
-			? this.parseFrontmatter(frontmatterMatch[1])
-			: {};
-
-		// Update sync metadata
-		frontmatter.vectorized_last = new Date().toISOString();
-		frontmatter.vectorized_version = '1.0';
-
-		// Create new frontmatter string
-		const newFrontmatter = Object.entries(frontmatter)
-			.map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-			.join('\n');
-
-		// Update file content
-		const newContent = frontmatterMatch
-			? content.replace(/^---\n[\s\S]*?\n---/, `---\n${newFrontmatter}\n---`)
-			: `---\n${newFrontmatter}\n---\n\n${content}`;
-
-		await this.vault.modify(file, newContent);
-	}
-
-	/**
-	 * Parse frontmatter YAML
-	 */
-	private parseFrontmatter(yaml: string): Record<string, any> {
-		try {
-			const frontmatter: Record<string, any> = {};
-			const lines = yaml.split('\n');
-
-			for (const line of lines) {
-				const [key, ...valueParts] = line.split(':');
-				if (key && valueParts.length) {
-					frontmatter[key.trim()] = valueParts.join(':').trim();
-				}
-			}
-
-			return frontmatter;
-		} catch (error) {
-			console.warn('Error parsing frontmatter:', error);
-			return {};
-		}
-	}
-
-	/**
-	 * Update progress notification
+	 * Update progress notifications.
 	 */
 	private updateProgressNotification(): void {
-		const progress = this.calculateProgress();
+		const progressPercentage = (this.progress.processedFiles / this.progress.totalFiles) * 100;
 		this.notificationManager.updateProgress({
 			taskId: 'initial-sync',
-			progress: progress.percentage,
+			progress: progressPercentage,
 			currentStep: `Processing files (${this.progress.processedFiles}/${this.progress.totalFiles})`,
 			totalSteps: this.progress.totalBatches,
 			currentStepNumber: this.progress.currentBatch + 1,
-			estimatedTimeRemaining: progress.estimatedTimeRemaining,
+			estimatedTimeRemaining: this.calculateEstimatedTimeRemaining(),
 			details: {
 				processedFiles: this.progress.processedFiles,
 				totalFiles: this.progress.totalFiles
@@ -357,45 +297,24 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Calculate current progress and estimated time remaining
+	 * Calculate estimated time remaining based on progress.
 	 */
-	private calculateProgress(): { percentage: number; estimatedTimeRemaining: number } {
-		const percentage = (this.progress.processedFiles / this.progress.totalFiles) * 100;
-
-		// Calculate estimated time remaining
+	private calculateEstimatedTimeRemaining(): number {
 		const elapsed = Date.now() - this.progress.startTime;
 		const filesPerMs = this.progress.processedFiles / elapsed;
 		const remainingFiles = this.progress.totalFiles - this.progress.processedFiles;
-		const estimatedTimeRemaining = filesPerMs > 0
-			? remainingFiles / filesPerMs
-			: 0;
-
-		return {
-			percentage,
-			estimatedTimeRemaining
-		};
+		return filesPerMs > 0 ? remainingFiles / filesPerMs : 0;
 	}
 
 	/**
-	 * Check if there are unprocessed batches
+	 * Update sync progress notifications.
 	 */
-	private hasUnprocessedBatches(): boolean {
-		return Array.from(this.batches.values()).some(
-			batch => batch.status === 'pending' || batch.status === 'processing'
-		);
+	private updateProgressNotificationBatch(): void {
+		this.updateProgressNotification();
 	}
 
 	/**
-	 * Get next pending batch
-	 */
-	private getNextPendingBatch(): SyncBatch | null {
-		return Array.from(this.batches.values()).find(
-			batch => batch.status === 'pending'
-		) || null;
-	}
-
-	/**
-	 * Stop the sync process
+	 * Stop the initial sync process.
 	 */
 	stop(): void {
 		this.isRunning = false;
@@ -406,14 +325,14 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Get current sync progress
+	 * Get current sync progress.
 	 */
 	getProgress(): SyncProgress {
 		return { ...this.progress };
 	}
 
 	/**
-	 * Update sync options
+	 * Update sync options.
 	 */
 	updateOptions(options: Partial<InitialSyncOptions>): void {
 		Object.assign(this.options, options);

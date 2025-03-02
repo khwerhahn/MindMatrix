@@ -1,28 +1,24 @@
+// src/services/QueueService.ts
 import { Vault, TFile } from 'obsidian';
 import { TextSplitter } from '../utils/TextSplitter';
-import {
-	ProcessingTask,
-	TaskStatus,
-	TaskType,
-	QueueStats,
-	TaskProgress,
-	TaskProcessingError,
-} from '../models/ProcessingTask';
+import { ProcessingTask, TaskStatus, TaskType, QueueStats, TaskProgress, TaskProcessingError } from '../models/ProcessingTask';
 import { ErrorHandler } from '../utils/ErrorHandler';
 import { NotificationManager } from '../utils/NotificationManager';
 import { SupabaseService } from './SupabaseService';
 import { OpenAIService } from './OpenAIService';
 import { DEFAULT_CHUNKING_OPTIONS } from '../settings/Settings';
+import { EventEmitter } from './EventEmitter';
 
 export class QueueService {
 	private queue: ProcessingTask[] = [];
 	private processingQueue: ProcessingTask[] = [];
 	private isProcessing: boolean = false;
 	private isStopped: boolean = true;
-	private isInitialized: boolean = false;
 	private processingInterval: NodeJS.Timeout | null = null;
 	private textSplitter: TextSplitter;
 	private vault: Vault;
+	// Event emitter for queue events.
+	private eventEmitter: EventEmitter;
 
 	constructor(
 		private maxConcurrent: number,
@@ -36,7 +32,6 @@ export class QueueService {
 	) {
 		this.vault = vault;
 		const validatedChunkSettings = chunkSettings || { ...DEFAULT_CHUNKING_OPTIONS };
-
 		try {
 			this.textSplitter = new TextSplitter(validatedChunkSettings);
 		} catch (error) {
@@ -46,19 +41,25 @@ export class QueueService {
 			});
 			throw new Error('Failed to initialize TextSplitter with provided settings.');
 		}
+		this.eventEmitter = new EventEmitter();
 	}
 
 	public start(): void {
 		if (!this.isStopped) return;
-
 		this.isStopped = false;
 		this.processQueue();
-
 		this.processingInterval = setInterval(() => {
 			if (!this.isProcessing) {
 				this.processQueue();
 			}
 		}, 1000);
+		// Emit event for queue started.
+		this.eventEmitter.emit('queue-status', {
+			queueSize: this.queue.length,
+			pendingChanges: 0,
+			processingCount: this.processingQueue.length,
+			status: 'processing'
+		});
 	}
 
 	public stop(): void {
@@ -67,27 +68,35 @@ export class QueueService {
 			clearInterval(this.processingInterval);
 			this.processingInterval = null;
 		}
+		// Emit event for queue stopped.
+		this.eventEmitter.emit('queue-status', {
+			queueSize: this.queue.length,
+			pendingChanges: 0,
+			processingCount: this.processingQueue.length,
+			status: 'paused'
+		});
 	}
 
 	async addTask(task: ProcessingTask): Promise<void> {
 		if (this.queue.length >= 1000) {
 			throw new Error(TaskProcessingError.QUEUE_FULL);
 		}
-
 		console.log('Adding task to queue:', {
 			id: task.id,
 			type: task.type,
-			priority: task.priority
+			priority: task.priority,
 		});
-
 		if (task.priority > 1) {
 			this.queue.unshift(task);
 		} else {
 			this.queue.push(task);
 		}
-
-		this.notifyProgress(task.id, 0, 'Task queued');
-
+		// Emit event for new task added.
+		this.eventEmitter.emit('queue-progress', {
+			processed: 0,
+			total: this.queue.length,
+			currentTask: task.id
+		});
 		if (!this.isProcessing && !this.isStopped) {
 			this.processQueue();
 		}
@@ -97,9 +106,7 @@ export class QueueService {
 		if (this.isProcessing || this.isStopped || this.queue.length === 0) {
 			return;
 		}
-
 		this.isProcessing = true;
-
 		try {
 			while (this.queue.length > 0 && this.processingQueue.length < this.maxConcurrent) {
 				const task = this.queue.shift();
@@ -111,9 +118,7 @@ export class QueueService {
 				}
 			}
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'QueueService.processQueue',
-			});
+			this.errorHandler.handleError(error, { context: 'QueueService.processQueue' });
 		} finally {
 			this.isProcessing = false;
 		}
@@ -123,14 +128,12 @@ export class QueueService {
 		console.log('Processing task:', {
 			id: task.id,
 			type: task.type,
-			status: task.status
+			status: task.status,
 		});
-
 		try {
 			task.status = TaskStatus.PROCESSING;
 			task.startedAt = Date.now();
 			this.notifyProgress(task.id, 0, `Starting ${task.type.toLowerCase()}`);
-
 			switch (task.type) {
 				case TaskType.CREATE:
 				case TaskType.UPDATE:
@@ -142,15 +145,20 @@ export class QueueService {
 				default:
 					throw new Error(`Unsupported task type: ${task.type}`);
 			}
-
 			task.status = TaskStatus.COMPLETED;
 			task.completedAt = Date.now();
 			this.notifyProgress(task.id, 100, 'Task completed');
 			console.log('Task completed successfully:', task.id);
+			// Emit event for task completion.
+			this.eventEmitter.emit('queue-progress', {
+				processed: 1,
+				total: this.queue.length + 1,
+				currentTask: task.id
+			});
 		} catch (error) {
 			console.error('Error processing task:', {
 				taskId: task.id,
-				error: error
+				error: error,
 			});
 			await this.handleTaskError(task, error);
 		} finally {
@@ -162,98 +170,66 @@ export class QueueService {
 		if (!this.supabaseService || !this.openAIService) {
 			throw new Error('Required services not initialized');
 		}
-
 		try {
 			console.log('Reading file:', task.id);
-
-			// Get file from task path
 			const file = this.vault.getAbstractFileByPath(task.id);
 			if (!(file instanceof TFile)) {
 				throw new Error(`File not found or not a TFile: ${task.id}`);
 			}
-
-			// Read file content
 			const content = await this.vault.read(file);
 			console.log('File content read successfully:', {
 				fileId: task.id,
 				contentLength: content.length,
-				contentPreview: content.substring(0, 100)
+				contentPreview: content.substring(0, 100),
 			});
-
-			// Split the content into chunks
 			this.notifyProgress(task.id, 20, 'Splitting content');
-			const chunks = this.textSplitter.splitDocument(content, task.metadata);
-
-			// Add null check for chunks
+			const chunks = await this.textSplitter.splitDocument(content, task.metadata);
 			if (!chunks || !Array.isArray(chunks) || chunks.length === 0) {
 				console.log('No valid chunks created for file:', {
 					fileId: task.id,
 					contentLength: content.length,
-					settings: this.textSplitter.getSettings()
+					settings: this.textSplitter.getSettings(),
 				});
-				return; // Exit gracefully instead of throwing error
+				return;
 			}
 			console.log('Content split into chunks:', {
 				numberOfChunks: chunks.length,
 				chunkSizes: chunks.map(c => c.content.length),
-				firstChunkPreview: chunks[0]?.content.substring(0, 100)
+				firstChunkPreview: chunks[0]?.content.substring(0, 100),
 			});
-
-			if (chunks.length === 0) {
-				console.warn('No chunks created for file:', {
-					fileId: task.id,
-					contentLength: content.length,
-					settings: this.textSplitter.getSettings()
-				});
-				throw new Error('No chunks created from file content');
-			}
-
-			// Generate embeddings for each chunk
 			this.notifyProgress(task.id, 40, 'Generating embeddings');
 			for (let i = 0; i < chunks.length; i++) {
 				const response = await this.openAIService.createEmbeddings([chunks[i].content]);
 				if (response.length > 0 && response[0].data.length > 0) {
 					chunks[i].embedding = response[0].data[0].embedding;
-					// Add vectorized_at timestamp when embedding is generated
 					chunks[i].vectorized_at = new Date().toISOString();
 					console.log(`Generated embedding for chunk ${i + 1}/${chunks.length}`);
 				} else {
 					throw new Error(`Failed to generate embedding for chunk ${i + 1}`);
 				}
-
-				this.notifyProgress(
-					task.id,
-					40 + Math.floor((i / chunks.length) * 30),
-					`Processed ${i + 1} of ${chunks.length} chunks`
-				);
+				this.notifyProgress(task.id, 40 + Math.floor((i / chunks.length) * 30), `Processed ${i + 1} of ${chunks.length} chunks`);
 			}
-
-			// Prepare chunks with complete metadata for database
 			const enhancedChunks = chunks.map(chunk => ({
 				...chunk,
 				metadata: {
 					...chunk.metadata,
-					// Ensure all metadata fields are present
 					aliases: chunk.metadata.aliases || [],
 					links: chunk.metadata.links || [],
-					tags: chunk.metadata.tags || []
-				}
+					tags: chunk.metadata.tags || [],
+				},
 			}));
-
-			// Save chunks to database
 			this.notifyProgress(task.id, 70, 'Saving to database');
 			await this.supabaseService.upsertChunks(enhancedChunks);
 			console.log('Chunks saved to database:', {
 				numberOfChunks: enhancedChunks.length,
-				fileId: task.id
+				fileId: task.id,
 			});
-
 			this.notifyProgress(task.id, 100, 'Processing completed');
 		} catch (error) {
 			console.error('Error in processCreateUpdateTask:', {
 				error,
 				taskId: task.id,
-				metadata: task.metadata
+				metadata: task.metadata,
 			});
 			throw error;
 		}
@@ -263,7 +239,6 @@ export class QueueService {
 		if (!this.supabaseService) {
 			throw new Error('Supabase service not initialized');
 		}
-
 		try {
 			this.notifyProgress(task.id, 50, 'Deleting from database');
 			await this.supabaseService.deleteDocumentChunks(task.metadata.obsidianId);
@@ -272,7 +247,7 @@ export class QueueService {
 			console.error('Error in processDeleteTask:', {
 				error,
 				taskId: task.id,
-				metadata: task.metadata
+				metadata: task.metadata,
 			});
 			throw error;
 		}
@@ -281,16 +256,14 @@ export class QueueService {
 	private async handleTaskError(task: ProcessingTask, error: any): Promise<void> {
 		task.retryCount = (task.retryCount || 0) + 1;
 		task.updatedAt = Date.now();
-
 		if (task.retryCount < this.maxRetries) {
 			task.status = TaskStatus.RETRYING;
 			this.queue.unshift(task);
-
 			this.notifyProgress(task.id, 0, `Retry attempt ${task.retryCount}`);
 			console.log('Task queued for retry:', {
 				taskId: task.id,
 				retryCount: task.retryCount,
-				maxRetries: this.maxRetries
+				maxRetries: this.maxRetries,
 			});
 		} else {
 			task.status = TaskStatus.FAILED;
@@ -302,19 +275,24 @@ export class QueueService {
 			task.completedAt = Date.now();
 			console.error('Task failed after max retries:', {
 				taskId: task.id,
-				error: task.error
+				error: task.error,
 			});
 		}
-
 		this.errorHandler.handleError(error, {
 			context: 'QueueService.processTask',
 			taskId: task.id,
 			taskType: task.type,
 		});
+		// Emit event for error occurrence.
+		this.eventEmitter.emit('queue-progress', {
+			processed: 0,
+			total: this.queue.length,
+			currentTask: task.id
+		});
 	}
 
 	private removeFromProcessingQueue(task: ProcessingTask): void {
-		const index = this.processingQueue.findIndex((t) => t.id === task.id);
+		const index = this.processingQueue.findIndex(t => t.id === task.id);
 		if (index !== -1) {
 			this.processingQueue.splice(index, 1);
 		}
@@ -328,34 +306,34 @@ export class QueueService {
 			totalSteps: 1,
 			currentStepNumber: 1,
 		});
+		// Emit progress update event.
+		this.eventEmitter.emit('queue-progress', {
+			processed: progress,
+			total: 100,
+			currentTask: taskId
+		});
 	}
 
 	public getQueueStats(): QueueStats {
 		const now = Date.now();
 		const oneHour = 60 * 60 * 1000;
-
 		const tasksByStatus = this.queue.reduce((acc, task) => {
 			acc[task.status] = (acc[task.status] || 0) + 1;
 			return acc;
 		}, {} as Record<TaskStatus, number>);
-
 		const tasksByType = this.queue.reduce((acc, task) => {
 			acc[task.type] = (acc[task.type] || 0) + 1;
 			return acc;
 		}, {} as Record<TaskType, number>);
-
 		const completedTasks = this.queue.filter(
 			task => task.status === TaskStatus.COMPLETED && task.completedAt
 		);
-
 		const averageTime = completedTasks.length > 0
 			? completedTasks.reduce((sum, task) => sum + (task.completedAt! - task.startedAt!), 0) / completedTasks.length
 			: 0;
-
 		const tasksLastHour = completedTasks.filter(
 			task => task.completedAt! > now - oneHour
 		).length;
-
 		return {
 			totalTasks: this.queue.length,
 			tasksByStatus,
@@ -373,16 +351,20 @@ export class QueueService {
 		this.notificationManager.clear();
 	}
 
-	public updateSettings(settings: {
-		maxConcurrent: number;
-		maxRetries: number;
-		chunkSettings?: { chunkSize: number; chunkOverlap: number; minChunkSize: number };
-	}): void {
+	public updateSettings(settings: { maxConcurrent: number; maxRetries: number; chunkSettings?: { chunkSize: number; chunkOverlap: number; minChunkSize: number } }): void {
 		this.maxConcurrent = settings.maxConcurrent;
 		this.maxRetries = settings.maxRetries;
-
 		if (settings.chunkSettings) {
 			this.textSplitter = new TextSplitter(settings.chunkSettings);
 		}
+	}
+
+	/**
+	 * Subscribe to queue events.
+	 * @param eventName The event to subscribe to.
+	 * @param callback The callback function.
+	 */
+	public on<T extends keyof any>(eventName: T, callback: (data: any) => void): () => void {
+		return this.eventEmitter.on(eventName as any, callback);
 	}
 }

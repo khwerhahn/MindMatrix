@@ -3,7 +3,7 @@
 	"name": "Mind Matrix",
 	"version": "0.1",
 	"minAppVersion": "0.15.0",
-	"description": "Sync your notes with a postgres vector database and integrate it with your personal AI assistant.",
+	"description": "Enhance your Obsidian experience by seamlessly syncing your notes with a Supabase vector database. Mind Matrix leverages AI-powered embeddings for semantic search, robust offline support, and cross-device coordination, ensuring your personal knowledge base is always accessible and intelligently organized.",
 	"author": "khwhahn",
 	"authorUrl": "https://khw.io",
 	"fundingUrl": "",
