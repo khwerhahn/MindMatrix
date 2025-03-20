@@ -145,6 +145,21 @@ Check the following tasks against the code base to make sure they have been impl
    - Delete the file and check the database to verify the data is deleted correctly.
    - So proper file live cylce testing
 
+2. **Check for performance Improvements for large vaults**:
+   - Tell me what can be done to improve the performance of the plugin for large vaults.
+
+3. **Clean up the settings ui**:
+   - The settings UI is a bit cluttered and can be cleaned up to make it more user friendly.
+
+4. **Readme documentation**:
+   - The readme documentation can be improved to make it more user friendly and informative.
+   - Documentation needs to be aligned with the current state of the plugin.
+   - A sperate file should be created that takes the user through setting up n8n to query the database.
+
+5. **Setup github repo for public collaboration and pull request**:
+   - Setup the github repo for public collaboration and pull request.
+   - What are good practices to follow for a public repo?
+
 ---
 
 ## **Development Goals**
