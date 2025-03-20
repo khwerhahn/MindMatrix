@@ -51,6 +51,8 @@ export class FileTracker {
 	 */
 	async initialize(): Promise<void> {
 		try {
+			console.log('[FileTracker.initialize] Starting FileTracker initialization');
+			console.log(`[FileTracker.initialize] Sync file path: ${this.syncFilePath}`);
 			// Initialize sync manager (fallback for offline mode)
 			await this.syncManager.initialize();
 			// If Supabase service is available, reconcile DB status with local file state.

@@ -143,30 +143,60 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 					})
 			);
 
-		// Exclusion Settings Section
+		// Exclusion Settings Section - Now only showing user-defined exclusions
 		containerEl.createEl('h2', { text: 'Exclusions' });
 		new Setting(containerEl)
-			.setName('Excluded Folders')
-			.setDesc('Comma-separated list of folders to exclude from syncing.')
+			.setName('Additional Excluded Folders')
+			.setDesc('Comma-separated list of additional folders to exclude from syncing.')
 			.addText(text =>
-				text.setValue(this.settings.exclusions.excludedFolders.join(', '))
+				text.setValue((this.settings.exclusions?.excludedFolders || []).join(', '))
 					.onChange(async (value) => {
 						this.settings.exclusions.excludedFolders = value.split(',').map(s => s.trim()).filter(s => s);
 						await this.plugin.saveSettings();
-						new Notice('Excluded folders updated.');
+						new Notice('Additional excluded folders updated.');
 					})
 			);
 		new Setting(containerEl)
-			.setName('Excluded File Types')
-			.setDesc('Comma-separated list of file extensions to exclude (e.g., .mp3, .jpg).')
+			.setName('Additional Excluded File Types')
+			.setDesc('Comma-separated list of additional file extensions to exclude (e.g., .mp3, .jpg).')
 			.addText(text =>
 				text.setValue(this.settings.exclusions.excludedFileTypes.join(', '))
 					.onChange(async (value) => {
 						this.settings.exclusions.excludedFileTypes = value.split(',').map(s => s.trim()).filter(s => s);
 						await this.plugin.saveSettings();
-						new Notice('Excluded file types updated.');
+						new Notice('Additional excluded file types updated.');
 					})
 			);
+		new Setting(containerEl)
+			.setName('Additional Excluded File Prefixes')
+			.setDesc('Comma-separated list of file name prefixes to exclude.')
+			.addText(text =>
+				text.setValue(this.settings.exclusions.excludedFilePrefixes.join(', '))
+					.onChange(async (value) => {
+						this.settings.exclusions.excludedFilePrefixes = value.split(',').map(s => s.trim()).filter(s => s);
+						await this.plugin.saveSettings();
+						new Notice('Additional excluded file prefixes updated.');
+					})
+			);
+		new Setting(containerEl)
+			.setName('Additional Excluded Files')
+			.setDesc('Comma-separated list of specific files to exclude from syncing.')
+			.addText(text =>
+				text.setValue(this.settings.exclusions.excludedFiles.join(', '))
+					.onChange(async (value) => {
+						this.settings.exclusions.excludedFiles = value.split(',').map(s => s.trim()).filter(s => s);
+						await this.plugin.saveSettings();
+						new Notice('Additional excluded files updated.');
+					})
+			);
+
+		// Info text about default exclusions
+		const infoDiv = containerEl.createEl('div', { cls: 'setting-item-description' });
+		infoDiv.innerHTML = 'The following are automatically excluded: <br>' +
+			'• Folders: .obsidian, .trash, .git, node_modules<br>' +
+			'• File types: .mp3, .jpg, .png, .pdf, .excalidraw<br>' +
+			'• File prefixes: _, .<br>' +
+			'• Files: _mindmatrixsync.md, _mindmatrixsync.md.backup';
 
 		// Queue & Sync Settings Section
 		containerEl.createEl('h2', { text: 'Queue & Sync Settings' });
@@ -188,6 +218,19 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 				text.setValue(this.settings.sync.syncFilePath)
 					.onChange(async (value) => {
 						this.settings.sync.syncFilePath = value;
+						// Also update the system excluded files
+						const systemFiles = this.settings.exclusions.systemExcludedFiles;
+						// Remove old sync file references
+						const oldSyncFileIndex = systemFiles.findIndex(f => f === '_mindmatrixsync.md');
+						const oldSyncBackupIndex = systemFiles.findIndex(f => f === '_mindmatrixsync.md.backup');
+
+						if (oldSyncFileIndex !== -1) systemFiles.splice(oldSyncFileIndex, 1);
+						if (oldSyncBackupIndex !== -1) systemFiles.splice(oldSyncBackupIndex, 1);
+
+						// Add new sync file references
+						systemFiles.push(value);
+						systemFiles.push(value + '.backup');
+
 						await this.plugin.saveSettings();
 						new Notice('Sync file path updated.');
 					})

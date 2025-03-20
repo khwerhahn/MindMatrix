@@ -12,6 +12,13 @@ interface InitialSyncOptions {
 	maxConcurrentBatches: number;
 	enableAutoInitialSync: boolean;
 	priorityRules: PriorityRule[];
+	syncFilePath?: string;
+	exclusions?: {
+		excludedFolders: string[];
+		excludedFileTypes: string[];
+		excludedFilePrefixes: string[];
+		excludedFiles: string[];
+	};
 }
 
 interface PriorityRule {
@@ -62,6 +69,13 @@ export class InitialSyncManager {
 			maxConcurrentBatches: 3,
 			enableAutoInitialSync: true,
 			priorityRules: [],
+			syncFilePath: '_mindmatrixsync.md',
+			exclusions: {
+				excludedFolders: [],
+				excludedFileTypes: [],
+				excludedFilePrefixes: [],
+				excludedFiles: []
+			},
 			...options
 		};
 		this.progress = {
@@ -72,6 +86,75 @@ export class InitialSyncManager {
 			startTime: 0
 		};
 		this.supabaseService = supabaseService;
+	}
+
+	/**
+	 * Filter files based on exclusion rules
+	 */
+	private filterExcludedFiles(files: TFile[]): TFile[] {
+		console.log(`[InitialSyncManager.filterExcludedFiles] Filtering ${files.length} files`);
+
+		const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
+		const exclusions = this.options.exclusions || {
+			excludedFolders: [],
+			excludedFileTypes: [],
+			excludedFilePrefixes: [],
+			excludedFiles: []
+		};
+
+		return files.filter(file => {
+			const filePath = file.path;
+			const fileName = file.name;
+
+			// First explicitly check for sync files
+			if (
+				filePath === syncFilePath ||
+				filePath === '_mindmatrixsync.md' ||
+				filePath === '_mindmatrixsync.md.backup'
+			) {
+				console.log(`[InitialSyncManager.filterExcludedFiles] Excluding sync file: ${filePath}`);
+				return false;
+			}
+
+			// Check excluded files
+			if (exclusions.excludedFiles && exclusions.excludedFiles.includes(fileName)) {
+				console.log(`[InitialSyncManager.filterExcludedFiles] Excluding file on exclusion list: ${fileName}`);
+				return false;
+			}
+
+			// Check excluded folders
+			if (exclusions.excludedFolders) {
+				for (const folder of exclusions.excludedFolders) {
+					const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
+					if (filePath.startsWith(normalizedFolder)) {
+						console.log(`[InitialSyncManager.filterExcludedFiles] Excluding file in excluded folder: ${filePath}`);
+						return false;
+					}
+				}
+			}
+
+			// Check excluded file types
+			if (exclusions.excludedFileTypes) {
+				for (const fileType of exclusions.excludedFileTypes) {
+					if (filePath.toLowerCase().endsWith(fileType.toLowerCase())) {
+						console.log(`[InitialSyncManager.filterExcludedFiles] Excluding file with excluded type: ${filePath}`);
+						return false;
+					}
+				}
+			}
+
+			// Check excluded file prefixes
+			if (exclusions.excludedFilePrefixes) {
+				for (const prefix of exclusions.excludedFilePrefixes) {
+					if (fileName.startsWith(prefix)) {
+						console.log(`[InitialSyncManager.filterExcludedFiles] Excluding file with excluded prefix: ${fileName}`);
+						return false;
+					}
+				}
+			}
+
+			return true;
+		});
 	}
 
 	/**
@@ -87,8 +170,29 @@ export class InitialSyncManager {
 		try {
 			this.isRunning = true;
 			this.progress.startTime = Date.now();
-			// Get all markdown files from the vault and sort by priority
-			const files = this.vault.getMarkdownFiles();
+			console.log('[InitialSyncManager] Starting to collect files for initial sync');
+
+			// Get all markdown files from the vault
+			const allFiles = this.vault.getMarkdownFiles();
+			console.log(`[InitialSyncManager] Collected ${allFiles.length} total markdown files from vault`);
+
+			// Filter out excluded files
+			const files = this.filterExcludedFiles(allFiles);
+			console.log(`[InitialSyncManager] After exclusion filtering: ${files.length} files remain`);
+
+			// Additional logging for verification
+			const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
+			console.log(`[InitialSyncManager] Sync file path being excluded: ${syncFilePath}`);
+			console.log('[InitialSyncManager] Sample of filtered files:', files.slice(0, 5).map(f => f.path));
+
+			// Verify sync file is not included
+			const syncFileIncluded = files.some(file =>
+				file.path === syncFilePath ||
+				file.path === '_mindmatrixsync.md' ||
+				file.path === '_mindmatrixsync.md.backup'
+			);
+			console.log(`[InitialSyncManager] Is sync file included in filtered files? ${syncFileIncluded}`);
+
 			this.resumeFileList = await this.sortFilesByPriority(files);
 			this.progress.totalFiles = this.resumeFileList.length;
 			// Create batches based on resumeFileList and lastProcessedIndex
@@ -136,6 +240,27 @@ export class InitialSyncManager {
 	 * Create batches of files for processing.
 	 */
 	private createBatches(files: TFile[]): SyncBatch[] {
+		console.log(`[InitialSyncManager.createBatches] Creating batches from ${files.length} files`);
+
+		// Double-check for sync file as a safety measure
+		const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
+		const syncFileIncluded = files.some(file =>
+			file.path === syncFilePath ||
+			file.path === '_mindmatrixsync.md' ||
+			file.path === '_mindmatrixsync.md.backup'
+		);
+
+		if (syncFileIncluded) {
+			console.log(`[InitialSyncManager.createBatches] WARNING: Sync file is still in the file list at batching stage`);
+			// Additional safety: filter here too
+			files = files.filter(file =>
+				file.path !== syncFilePath &&
+				file.path !== '_mindmatrixsync.md' &&
+				file.path !== '_mindmatrixsync.md.backup'
+			);
+			console.log(`[InitialSyncManager.createBatches] Filtered out sync file, now have ${files.length} files`);
+		}
+
 		const batches: SyncBatch[] = [];
 		for (let i = 0; i < files.length; i += this.options.batchSize) {
 			const batchFiles = files.slice(i, i + this.options.batchSize);
@@ -215,6 +340,17 @@ export class InitialSyncManager {
 	 */
 	private async processFile(file: TFile): Promise<void> {
 		try {
+			console.log(`[InitialSyncManager.processFile] Processing file: ${file.path}`);
+
+			// Final safety check before processing
+			const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
+			if (file.path === syncFilePath ||
+				file.path === '_mindmatrixsync.md' ||
+				file.path === '_mindmatrixsync.md.backup') {
+				console.log(`[InitialSyncManager.processFile] SKIPPING sync file: ${file.path}`);
+				return; // Skip processing entirely
+			}
+
 			// Extract metadata
 			const metadata = await this.metadataExtractor.extractMetadata(file);
 			// Calculate file hash for change detection

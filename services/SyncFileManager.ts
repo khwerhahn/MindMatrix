@@ -94,19 +94,12 @@ export class SyncFileManager {
 	 */
 	private async createSyncFile(): Promise<void> {
 		console.log('Starting sync file creation with wait periods...');
-		// First check if the file exists and try to delete it
+
+		// Increased delay for safer file operations
+		const FILE_OP_DELAY = 1000; // 1 second
+
+		// First check if the file exists
 		const existingFile = this.vault.getAbstractFileByPath(this.syncFilePath);
-		if (existingFile instanceof TFile) {
-			try {
-				console.log('Existing sync file found, removing before recreation');
-				await this.vault.delete(existingFile);
-				// Small delay after deletion
-				await new Promise(resolve => setTimeout(resolve, 500));
-			} catch (deleteError) {
-				console.warn('Failed to delete existing sync file:', deleteError);
-				// Continue anyway, we'll try to overwrite it
-			}
-		}
 
 		// Create new sync data
 		this.currentSyncData = createEmptySyncFileData(
@@ -115,28 +108,72 @@ export class SyncFileManager {
 			this.deviceName,
 			this.pluginVersion
 		);
+
 		// Generate initial content
 		const initialContent = this.generateSyncFileContent(this.currentSyncData);
-		// First wait period - 2 seconds before creation to avoid races with Obsidian sync
-		console.log('Waiting 2 seconds before creating sync file...');
-		await new Promise(resolve => setTimeout(resolve, 2000));
-		try {
-			// Try to create the file
-			this.syncFile = await this.vault.create(this.syncFilePath, initialContent);
-		} catch (createError) {
-			// If creation fails, try to modify it instead (might already exist)
-			console.log('Failed to create sync file, trying to modify existing:', createError);
-			const existingFile = this.vault.getAbstractFileByPath(this.syncFilePath);
-			if (existingFile instanceof TFile) {
+
+		// If file exists, prioritize modifying it instead of deleting and recreating
+		if (existingFile instanceof TFile) {
+			try {
+				console.log('Existing sync file found, attempting to modify it');
 				this.syncFile = existingFile;
 				await this.vault.modify(existingFile, initialContent);
-			} else {
-				throw new Error(`Failed to create or modify sync file: ${createError.message}`);
+				console.log('Successfully modified existing sync file');
+
+				// Wait a bit to ensure file system operations complete
+				await new Promise(resolve => setTimeout(resolve, FILE_OP_DELAY));
+				return;
+			} catch (modifyError) {
+				console.warn('Failed to modify existing sync file, will try delete and recreate:', modifyError);
+
+				// If modification fails, try delete and recreate approach
+				try {
+					await this.vault.delete(existingFile);
+					// Longer delay after deletion
+					await new Promise(resolve => setTimeout(resolve, FILE_OP_DELAY));
+				} catch (deleteError) {
+					console.error('Failed to delete existing sync file:', deleteError);
+					throw new Error(`Cannot modify or delete sync file: ${modifyError.message}, ${deleteError.message}`);
+				}
 			}
 		}
-		console.log('Sync file created, starting stability wait period...');
-		// Second wait period - 1 second after creation
-		await new Promise(resolve => setTimeout(resolve, 1000));
+
+		// File doesn't exist or was deleted, proceed with creation
+		console.log('Waiting before creating sync file...');
+		await new Promise(resolve => setTimeout(resolve, FILE_OP_DELAY));
+
+		// Multiple attempts for creation with increasing delays
+		let createAttempts = 0;
+		const maxAttempts = 3;
+
+		while (createAttempts < maxAttempts) {
+			try {
+				this.syncFile = await this.vault.create(this.syncFilePath, initialContent);
+				console.log('Sync file created successfully');
+				break;
+			} catch (createError) {
+				createAttempts++;
+				console.warn(`Create attempt ${createAttempts} failed:`, createError);
+
+				if (createAttempts >= maxAttempts) {
+					// Last resort: check if file exists despite creation error
+					const finalCheck = this.vault.getAbstractFileByPath(this.syncFilePath);
+					if (finalCheck instanceof TFile) {
+						console.log('Sync file exists despite creation error, using it');
+						this.syncFile = finalCheck;
+						return;
+					}
+
+					throw new Error(`Failed to create sync file after ${maxAttempts} attempts: ${createError.message}`);
+				}
+
+				// Exponential backoff for retries
+				const waitTime = FILE_OP_DELAY * (createAttempts + 1);
+				console.log(`Waiting ${waitTime}ms before retry...`);
+				await new Promise(resolve => setTimeout(resolve, waitTime));
+			}
+		}
+
 		// Verify file exists and is readable
 		const fileExists = this.vault.getAbstractFileByPath(this.syncFilePath);
 		if (!fileExists) {
@@ -149,6 +186,7 @@ export class SyncFileManager {
 				false
 			);
 		}
+
 		console.log('Sync file creation completed successfully');
 	}
 

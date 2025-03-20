@@ -11,10 +11,16 @@ export interface ChunkSettings {
  * Configuration for excluded paths
  */
 export interface ExclusionSettings {
-    excludedFolders: string[];      // Folders to exclude from processing
-    excludedFileTypes: string[];    // File extensions to exclude
-    excludedFilePrefixes: string[]; // File name prefixes to exclude
-    excludedFiles: string[];
+    excludedFolders: string[];      // User-defined folders to exclude from processing
+    excludedFileTypes: string[];    // User-defined file extensions to exclude
+    excludedFilePrefixes: string[]; // User-defined file name prefixes to exclude
+    excludedFiles: string[];        // User-defined specific files to exclude
+
+    // System-level exclusions that are always applied but not shown in UI
+    systemExcludedFolders: string[];
+    systemExcludedFileTypes: string[];
+    systemExcludedFilePrefixes: string[];
+    systemExcludedFiles: string[];
 }
 
 /**
@@ -168,6 +174,27 @@ export function getPlatformInfo(): string {
 }
 
 /**
+ * System-level exclusions that are always applied but not shown in UI
+ */
+export const SYSTEM_EXCLUSIONS = {
+    folders: [
+        '.obsidian',           // Obsidian config folder
+        '.trash',              // Obsidian trash folder
+        '.git',                // Git folder if used
+        'node_modules'         // Node modules if used
+    ],
+    fileTypes: [
+        '.mp3', '.jpg', '.png', '.pdf', // Non-markdown files
+        '.excalidraw'                    // Excalidraw files
+    ],
+    filePrefixes: ['_', '.'],   // Hidden and special files
+    files: [
+        '_mindmatrixsync.md',           // Sync file
+        '_mindmatrixsync.md.backup'     // Sync backup file
+    ]
+};
+
+/**
  * Default settings when plugin is first initialized
  */
 export const DEFAULT_SETTINGS: MindMatrixSettings = {
@@ -198,22 +225,19 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
     },
 
     exclusions: {
-        excludedFolders: [
-            '.obsidian',           // Obsidian config folder
-            '.trash',             // Obsidian trash folder
-            '.git',              // Git folder if used
-            'node_modules'       // Node modules if used
-        ],
-        excludedFileTypes: [
-            '.mp3', '.jpg', '.png', '.pdf', // Non-markdown files
-            '.excalidraw'                    // Excalidraw files
-        ],
-        excludedFilePrefixes: ['_', '.'],   // Hidden and special files
-        excludedFiles: [
-            '_mindmatrixsync.md',           // Sync file
-            '_mindmatrixsync.md.backup'     // Sync backup file
-        ]
+        // User-facing exclusions (initially empty)
+        excludedFolders: [],
+        excludedFileTypes: [],
+        excludedFilePrefixes: [],
+        excludedFiles: [],
+
+        // System exclusions (hidden from UI)
+        systemExcludedFolders: [...SYSTEM_EXCLUSIONS.folders],
+        systemExcludedFileTypes: [...SYSTEM_EXCLUSIONS.fileTypes],
+        systemExcludedFilePrefixes: [...SYSTEM_EXCLUSIONS.filePrefixes],
+        systemExcludedFiles: [...SYSTEM_EXCLUSIONS.files]
     },
+
     debug: {
         enableDebugLogs: false,
         logLevel: 'info',
@@ -252,6 +276,36 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
         ]
     }
 };
+
+/**
+ * Get a combined list of all exclusions (system + user)
+ */
+export function getAllExclusions(settings: MindMatrixSettings): {
+    excludedFolders: string[],
+    excludedFileTypes: string[],
+    excludedFilePrefixes: string[],
+    excludedFiles: string[]
+} {
+    const exclusions = settings.exclusions;
+    return {
+        excludedFolders: [
+            ...exclusions.systemExcludedFolders || SYSTEM_EXCLUSIONS.folders,
+            ...exclusions.excludedFolders || []
+        ],
+        excludedFileTypes: [
+            ...exclusions.systemExcludedFileTypes || SYSTEM_EXCLUSIONS.fileTypes,
+            ...exclusions.excludedFileTypes || []
+        ],
+        excludedFilePrefixes: [
+            ...exclusions.systemExcludedFilePrefixes || SYSTEM_EXCLUSIONS.filePrefixes,
+            ...exclusions.excludedFilePrefixes || []
+        ],
+        excludedFiles: [
+            ...exclusions.systemExcludedFiles || SYSTEM_EXCLUSIONS.files,
+            ...exclusions.excludedFiles || []
+        ]
+    };
+}
 
 /**
  * Type guard to check if a vault is initialized
@@ -348,11 +402,11 @@ export function validateExclusionSettings(settings: ExclusionSettings): string[]
         }
     });
 
-    // Ensure sync files are always excluded
+    // Ensure sync files are always excluded (in system exclusions)
     const requiredExclusions = ['_mindmatrixsync.md', '_mindmatrixsync.md.backup'];
     requiredExclusions.forEach(file => {
-        if (!settings.excludedFiles.includes(file)) {
-            settings.excludedFiles.push(file);
+        if (!settings.systemExcludedFiles.includes(file)) {
+            settings.systemExcludedFiles.push(file);
         }
     });
 
@@ -363,7 +417,22 @@ export function validateExclusionSettings(settings: ExclusionSettings): string[]
  * Reset settings to defaults
  */
 export function resetSettings(settings: MindMatrixSettings): void {
+    // Preserve system exclusions if they exist
+    const systemExclusions = {
+        systemExcludedFolders: settings.exclusions?.systemExcludedFolders || SYSTEM_EXCLUSIONS.folders,
+        systemExcludedFileTypes: settings.exclusions?.systemExcludedFileTypes || SYSTEM_EXCLUSIONS.fileTypes,
+        systemExcludedFilePrefixes: settings.exclusions?.systemExcludedFilePrefixes || SYSTEM_EXCLUSIONS.filePrefixes,
+        systemExcludedFiles: settings.exclusions?.systemExcludedFiles || SYSTEM_EXCLUSIONS.files
+    };
+
     Object.assign(settings, DEFAULT_SETTINGS);
+
+    // Restore system exclusions
+    settings.exclusions = {
+        ...settings.exclusions,
+        ...systemExclusions
+    };
+
     settings.vaultId = null; // Ensure vault needs to be reinitialized
     settings.supabase.initialized = false; // Force database reinitialization
 }

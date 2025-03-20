@@ -134,80 +134,18 @@ The plugin is designed to **treat user notes as immutable**. In earlier versions
 ---
 
 ## **Detailed Todo List**
-
-### **Completed Tasks**
-
-- **Sync File Architecture Refactoring**
-  - Created `SyncModels.ts` for new cross-device coordination data structures.
-  - Redesigned the sync file (`_mindmatrixsync.md`) to focus solely on device synchronization.
-  - Implemented device identification tracking, sync timestamp recording, and enhanced backup/recovery mechanisms.
-- **Settings and Metadata Handling**
-  - Updated `Settings.ts` with device-specific settings and enhanced sync configuration options.
-  - Refactored `ErrorHandler.ts` for improved reporting of sync and database issues.
-  - Enhanced `MetadataExtractor.ts` by adding `extractMetadataFromContent` to merge front matter without modifying user files.
-  - Updated `TextSplitter.ts` to include robust metadata extraction and read-only behavior.
-- **Database Integration**
-  - Implemented file status tracking in `SupabaseService.ts` using the `obsidian_file_status` table.
-  - Added bulk operations support and improved error handling in SupabaseService.
-- **User Data Safety**
-  - Removed direct modifications to user notes.
-  - All processing state is stored externally to preserve note immutability.
-- **SyncFileManager.ts Updates**
-  - Enhanced conflict detection and resolution strategies.
-  - Added an alias for `validateSyncState()` to support legacy calls.
-  - **New:** Implemented an `updateSyncStatus` method to update file statuses in the sync file.
-- **FileTracker.ts Updates**
-  - Improved handling of edge cases (renames, deletions) and integrated basic offline mode support with an optional OfflineQueueManager.
-- **StatusManager.ts Updates**
-  - Added clearer connectivity indicators and detailed feedback in the UI.
-- **InitialSyncManager.ts Updates**
-  - Added support for resuming interrupted syncs.
-  - Enhanced error handling for database operations.
-- **QueueService.ts Updates**
-  - Integrated an EventEmitter for granular UI feedback.
-  - Improved error handling and event emission.
-- **OfflineQueueManager.ts Implementation**
-  - Developed a system for queuing operations during offline periods.
-  - Implemented a reconciliation process to process queued operations upon restored connectivity.
-- **EventEmitter.ts**
-  - Provided a simple mechanism for event emission and subscription.
-- **ErrorHandler.ts Updates**
-  - Improved error normalization, logging, and specialized handling for sync and Supabase errors.
-- **NotificationManager.ts Updates**
-  - Implemented a fixed overall progress bar that displays progress in percent.
-  - Optimized notification handling to keep the UI concise.
-
----
-
+Check the following tasks against the code base to make sure they have been implemented correctly:
 ### **Pending Tasks (Findings & Improvements)**
 
-1. **Sync File Architecture Enhancements**
-   - Refine conflict detection and resolution strategies (e.g., automated resolution based on timestamps and content hashes).
-   - Enhance real-time connection state monitoring with corresponding UI updates.
-2. **Database-Based File Tracking Improvements**
-   - Continue refining FileTracker and InitialSyncManager to fully rely on database status and handle edge cases (especially for file renames and deletions).
-   - Optimize database queries (consider caching or bulk operations) to improve performance in large vaults.
-   - Develop comprehensive unit and integration tests for database operations and state reconciliation.
-3. **Enhanced Metadata Integration**
-   - Further improve metadata extraction in TextSplitter and MetadataExtractor.
-   - Validate that merging metadata does not affect user file content.
-   - Optionally enhance the embedding process by allowing external metadata to be prepended to text chunks.
-4. **Offline Mode Support**
-   - Improve mechanisms to detect and handle offline scenarios.
-   - Enhance the OfflineQueueManager reconciliation process.
-   - Add detailed UI feedback (via StatusManager) to inform users about connectivity status and offline operation processing.
-5. **Queue Status Event System Enhancements**
-   - Fine-tune event emissions in QueueService and further integrate with the EventEmitter.
-   - Complete wiring of the main plugin event system to ensure real-time status updates are consistently delivered to the UI.
-6. **Exclusion Logic for Sync File**
-   - **Problem:** The `_mindmatrixsync.md` file is still being processed, especially during initial sync.
-   - **Cause:** The current file exclusion logic in FileTracker does not filter out the sync file when retrieving all markdown files (e.g., via `vault.getMarkdownFiles()`).
-   - **Task:** Update the initial sync process to explicitly filter out the sync file and its backup (e.g., by comparing file names).
-7. **Code Quality and Maintainability Improvements**
-   - Consider formalizing dependency injection for service instantiation to improve testability and service decoupling.
-   - Separate complex service responsibilities (e.g., in SyncFileManager) into smaller, more focused modules.
-   - Standardize naming conventions and increase inline documentation for clarity.
-   - Add or improve unit and integration tests, especially for critical modules (database operations, sync file management, and queue processing).
+1. **Thorough Testing**:
+   - Conduct extensive testing with large vaults and concurrent operations.
+   - Implement automated tests for core services and edge cases.
+   - Create tests that create an .md file with content and then ckeck the database contents to verify the data is stored correctly.
+   - Modify the file and check the database again to verify the data is updated correctly.
+   - Delete the file and check the database to verify the data is deleted correctly.
+2. **Settings UI**:
+   - The user sees in the plugin UI the ".git, .obsidian, node_modules" which should not be shown in the UI.
+   - Also don't show in the ".mp3, .jpg, .png" in the exclude file types in the UI.
 
 ---
 
