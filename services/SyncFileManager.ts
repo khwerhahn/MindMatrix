@@ -710,4 +710,49 @@ export class SyncFileManager {
 			this.errorHandler.handleError(error, { context: 'SyncFileManager.updateLastSync' });
 		}
 	}
+
+	/**
+ * Gets the sync status for a specific file path.
+ */
+	async getSyncStatus(path: string): Promise<{ status: string; lastModified: number; hash: string } | null> {
+		try {
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+
+			if (this.currentSyncData && this.currentSyncData.header.fileStatuses) {
+				return this.currentSyncData.header.fileStatuses[path] || null;
+			}
+
+			return null;
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.getSyncStatus', metadata: { path } });
+			return null;
+		}
+	}
+
+	/**
+	 * Gets all sync entries from the sync file.
+	 */
+	async getAllSyncEntries(): Promise<Array<{ filePath: string; status: string; lastModified: number; hash: string }>> {
+		try {
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+
+			if (this.currentSyncData && this.currentSyncData.header.fileStatuses) {
+				return Object.entries(this.currentSyncData.header.fileStatuses).map(([filePath, data]) => ({
+					filePath,
+					status: data.status,
+					lastModified: data.lastModified,
+					hash: data.hash
+				}));
+			}
+
+			return [];
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.getAllSyncEntries' });
+			return [];
+		}
+	}
 }

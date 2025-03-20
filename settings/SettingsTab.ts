@@ -1,7 +1,7 @@
-// src/settings/SettingsTab.ts
+//SettingsTab.ts
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import MindMatrixPlugin from '../main';
-import { MindMatrixSettings, generateVaultId, isVaultInitialized } from './Settings';
+import { MindMatrixSettings, generateVaultId, isVaultInitialized, getUserExclusions, SYSTEM_EXCLUSIONS } from './Settings';
 
 export class MindMatrixSettingsTab extends PluginSettingTab {
 	plugin: MindMatrixPlugin;
@@ -16,6 +16,12 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+
+		// Debugging: Log all exclusion settings to console
+		console.log("DEBUG - All Exclusion Settings:", {
+			userSettings: this.settings.exclusions,
+			systemDefaults: SYSTEM_EXCLUSIONS
+		});
 
 		// Vault Identification Section
 		containerEl.createEl('h2', { text: 'Vault Identification' });
@@ -143,60 +149,129 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 					})
 			);
 
-		// Exclusion Settings Section - Now only showing user-defined exclusions
+		// Exclusion Settings Section - Only showing user-defined exclusions
 		containerEl.createEl('h2', { text: 'Exclusions' });
-		new Setting(containerEl)
-			.setName('Additional Excluded Folders')
-			.setDesc('Comma-separated list of additional folders to exclude from syncing.')
-			.addText(text =>
-				text.setValue((this.settings.exclusions?.excludedFolders || []).join(', '))
-					.onChange(async (value) => {
-						this.settings.exclusions.excludedFolders = value.split(',').map(s => s.trim()).filter(s => s);
-						await this.plugin.saveSettings();
-						new Notice('Additional excluded folders updated.');
-					})
-			);
-		new Setting(containerEl)
-			.setName('Additional Excluded File Types')
-			.setDesc('Comma-separated list of additional file extensions to exclude (e.g., .mp3, .jpg).')
-			.addText(text =>
-				text.setValue(this.settings.exclusions.excludedFileTypes.join(', '))
-					.onChange(async (value) => {
-						this.settings.exclusions.excludedFileTypes = value.split(',').map(s => s.trim()).filter(s => s);
-						await this.plugin.saveSettings();
-						new Notice('Additional excluded file types updated.');
-					})
-			);
-		new Setting(containerEl)
-			.setName('Additional Excluded File Prefixes')
-			.setDesc('Comma-separated list of file name prefixes to exclude.')
-			.addText(text =>
-				text.setValue(this.settings.exclusions.excludedFilePrefixes.join(', '))
-					.onChange(async (value) => {
-						this.settings.exclusions.excludedFilePrefixes = value.split(',').map(s => s.trim()).filter(s => s);
-						await this.plugin.saveSettings();
-						new Notice('Additional excluded file prefixes updated.');
-					})
-			);
-		new Setting(containerEl)
-			.setName('Additional Excluded Files')
-			.setDesc('Comma-separated list of specific files to exclude from syncing.')
-			.addText(text =>
-				text.setValue(this.settings.exclusions.excludedFiles.join(', '))
-					.onChange(async (value) => {
-						this.settings.exclusions.excludedFiles = value.split(',').map(s => s.trim()).filter(s => s);
-						await this.plugin.saveSettings();
-						new Notice('Additional excluded files updated.');
-					})
-			);
 
-		// Info text about default exclusions
+		// Get only user-defined exclusions for UI display
+		const userExclusions = getUserExclusions(this.settings);
+
+		// Debug: Log user exclusions from the function
+		console.log("DEBUG - User Exclusions from getUserExclusions():", userExclusions);
+
+		// Filter out any system exclusions that might have been accidentally saved in user lists
+		const systemFolders = new Set(SYSTEM_EXCLUSIONS.folders);
+		const systemFileTypes = new Set(SYSTEM_EXCLUSIONS.fileTypes);
+		const systemFilePrefixes = new Set(SYSTEM_EXCLUSIONS.filePrefixes);
+		const systemFiles = new Set(SYSTEM_EXCLUSIONS.files);
+
+		// Debug: Log the system exclusion sets
+		console.log("DEBUG - System Exclusion Sets:", {
+			folders: Array.from(systemFolders),
+			fileTypes: Array.from(systemFileTypes),
+			filePrefixes: Array.from(systemFilePrefixes),
+			files: Array.from(systemFiles)
+		});
+
+		// Filter out system items from user exclusions
+		const filteredUserFolders = userExclusions.excludedFolders.filter(folder => !systemFolders.has(folder));
+		const filteredUserFileTypes = userExclusions.excludedFileTypes.filter(type => !systemFileTypes.has(type));
+		const filteredUserFilePrefixes = userExclusions.excludedFilePrefixes.filter(prefix => !systemFilePrefixes.has(prefix));
+		const filteredUserFiles = userExclusions.excludedFiles.filter(file => !systemFiles.has(file));
+
+		// Debug: Log the filtered exclusions
+		console.log("DEBUG - Filtered User Exclusions:", {
+			folders: filteredUserFolders,
+			fileTypes: filteredUserFileTypes,
+			filePrefixes: filteredUserFilePrefixes,
+			files: filteredUserFiles
+		});
+
+		new Setting(containerEl)
+			.setName('Excluded Folders')
+			.setDesc('Folders to exclude from syncing (comma-separated).')
+			.addText(text => {
+				const value = filteredUserFolders.join(', ');
+				console.log("DEBUG - Setting excluded folders field value:", value);
+				return text.setPlaceholder('folder1, folder2')
+					.setValue(value)
+					.onChange(async (value) => {
+						console.log("DEBUG - Folders onChange event value:", value);
+						// Save only user-defined folders, ensuring we don't duplicate system folders
+						const userFolders = value.split(',').map(s => s.trim()).filter(s => s);
+						const finalFolders = userFolders.filter(folder => !systemFolders.has(folder));
+						console.log("DEBUG - Final folders to save:", finalFolders);
+						this.settings.exclusions.excludedFolders = finalFolders;
+						await this.plugin.saveSettings();
+						new Notice('Excluded folders updated.');
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Excluded File Types')
+			.setDesc('File extensions to exclude (comma-separated, include the dot).')
+			.addText(text => {
+				const value = filteredUserFileTypes.join(', ');
+
+				return text.setPlaceholder('.type1, .type2')
+					.setValue(value)
+					.onChange(async (value) => {
+						const userFileTypes = value.split(',').map(s => s.trim()).filter(s => s);
+						const finalFileTypes = userFileTypes.filter(type => !systemFileTypes.has(type));
+						this.settings.exclusions.excludedFileTypes = finalFileTypes;
+						await this.plugin.saveSettings();
+						new Notice('Excluded file types updated.');
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Excluded File Prefixes')
+			.setDesc('File name prefixes to exclude (comma-separated).')
+			.addText(text => {
+				const value = filteredUserFilePrefixes.join(', ');
+				console.log("DEBUG - Setting excluded file prefixes field value:", value);
+				return text.setPlaceholder('temp, draft')
+					.setValue(value)
+					.onChange(async (value) => {
+						console.log("DEBUG - File prefixes onChange event value:", value);
+						// Save only user-defined prefixes, ensuring we don't duplicate system prefixes
+						const userFilePrefixes = value.split(',').map(s => s.trim()).filter(s => s);
+						const finalFilePrefixes = userFilePrefixes.filter(prefix => !systemFilePrefixes.has(prefix));
+						console.log("DEBUG - Final file prefixes to save:", finalFilePrefixes);
+						this.settings.exclusions.excludedFilePrefixes = finalFilePrefixes;
+						await this.plugin.saveSettings();
+						new Notice('Excluded file prefixes updated.');
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Excluded Files')
+			.setDesc('Specific files to exclude from syncing (comma-separated).')
+			.addText(text => {
+				const value = filteredUserFiles.join(', ');
+				console.log("DEBUG - Setting excluded files field value:", value);
+				return text.setPlaceholder('file1.md, file2.md')
+					.setValue(value)
+					.onChange(async (value) => {
+						console.log("DEBUG - Files onChange event value:", value);
+						// Save only user-defined files, ensuring we don't duplicate system files
+						const userFiles = value.split(',').map(s => s.trim()).filter(s => s);
+						const finalFiles = userFiles.filter(file => !systemFiles.has(file));
+						console.log("DEBUG - Final files to save:", finalFiles);
+						this.settings.exclusions.excludedFiles = finalFiles;
+						await this.plugin.saveSettings();
+						new Notice('Excluded files updated.');
+					});
+			});
+
+		// Improved info text about system defaults
 		const infoDiv = containerEl.createEl('div', { cls: 'setting-item-description' });
-		infoDiv.innerHTML = 'The following are automatically excluded: <br>' +
-			'• Folders: .obsidian, .trash, .git, node_modules<br>' +
-			'• File types: .mp3, .jpg, .png, .pdf, .excalidraw<br>' +
-			'• File prefixes: _, .<br>' +
-			'• Files: _mindmatrixsync.md, _mindmatrixsync.md.backup';
+		infoDiv.innerHTML = `
+			<p><strong>Note:</strong> The following items are automatically excluded by the system:</p>
+			<p><strong>Folders:</strong> ${SYSTEM_EXCLUSIONS.folders.join(', ')}</p>
+			<p><strong>File Types:</strong> ${SYSTEM_EXCLUSIONS.fileTypes.join(', ')}</p>
+			<p><strong>File Prefixes:</strong> ${SYSTEM_EXCLUSIONS.filePrefixes.join(', ')}</p>
+			<p><strong>Files:</strong> ${SYSTEM_EXCLUSIONS.files.join(', ')}</p>
+		`;
 
 		// Queue & Sync Settings Section
 		containerEl.createEl('h2', { text: 'Queue & Sync Settings' });
@@ -223,14 +298,11 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 						// Remove old sync file references
 						const oldSyncFileIndex = systemFiles.findIndex(f => f === '_mindmatrixsync.md');
 						const oldSyncBackupIndex = systemFiles.findIndex(f => f === '_mindmatrixsync.md.backup');
-
 						if (oldSyncFileIndex !== -1) systemFiles.splice(oldSyncFileIndex, 1);
 						if (oldSyncBackupIndex !== -1) systemFiles.splice(oldSyncBackupIndex, 1);
-
 						// Add new sync file references
 						systemFiles.push(value);
 						systemFiles.push(value + '.backup');
-
 						await this.plugin.saveSettings();
 						new Notice('Sync file path updated.');
 					})
