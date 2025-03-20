@@ -137,14 +137,13 @@ The plugin is designed to **treat user notes as immutable**. In earlier versions
 Check the following tasks against the code base to make sure they have been implemented correctly:
 ### **Pending Tasks (Findings & Improvements)**
 
-1. **Find source of error**:
-- Error: this.syncManager.getSyncStatus is not a function
-2. **Thorough Testing**:
+1. **Thorough Testing**:
    - Conduct extensive testing with large vaults and concurrent operations.
    - Implement automated tests for core services and edge cases.
    - Create tests that create an .md file with content and then ckeck the database contents to verify the data is stored correctly.
    - Modify the file and check the database again to verify the data is updated correctly.
    - Delete the file and check the database to verify the data is deleted correctly.
+   - So proper file live cylce testing
 
 ---
 

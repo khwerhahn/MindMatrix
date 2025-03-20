@@ -269,6 +269,10 @@ export class SyncFileManager {
 			if (!this.currentSyncData.conflicts) this.currentSyncData.conflicts = [];
 			if (!this.currentSyncData.lastDatabaseCheck) this.currentSyncData.lastDatabaseCheck = Date.now();
 			if (!this.currentSyncData.databaseStatus) this.currentSyncData.databaseStatus = 'unknown';
+
+			// Initialize fileStatuses if it doesn't exist
+			if (!this.currentSyncData.header.fileStatuses) this.currentSyncData.header.fileStatuses = {};
+
 			// Update device information
 			this.currentSyncData = updateDeviceInSyncFile(
 				this.currentSyncData,
@@ -550,6 +554,26 @@ export class SyncFileManager {
 	}
 
 	/**
+	 * Gets the sync status for a specific file path.
+	 */
+	async getSyncStatus(path: string): Promise<{ status: string; lastModified: number; hash: string } | null> {
+		try {
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+
+			if (this.currentSyncData && this.currentSyncData.header.fileStatuses) {
+				return this.currentSyncData.header.fileStatuses[path] || null;
+			}
+
+			return null;
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.getSyncStatus', metadata: { path } });
+			return null;
+		}
+	}
+
+	/**
 	 * Get all pending operations
 	 */
 	async getPendingOperations(): Promise<Array<{
@@ -712,26 +736,6 @@ export class SyncFileManager {
 	}
 
 	/**
- * Gets the sync status for a specific file path.
- */
-	async getSyncStatus(path: string): Promise<{ status: string; lastModified: number; hash: string } | null> {
-		try {
-			if (!this.currentSyncData) {
-				await this.readSyncFile();
-			}
-
-			if (this.currentSyncData && this.currentSyncData.header.fileStatuses) {
-				return this.currentSyncData.header.fileStatuses[path] || null;
-			}
-
-			return null;
-		} catch (error) {
-			this.errorHandler.handleError(error, { context: 'SyncFileManager.getSyncStatus', metadata: { path } });
-			return null;
-		}
-	}
-
-	/**
 	 * Gets all sync entries from the sync file.
 	 */
 	async getAllSyncEntries(): Promise<Array<{ filePath: string; status: string; lastModified: number; hash: string }>> {
@@ -753,6 +757,31 @@ export class SyncFileManager {
 		} catch (error) {
 			this.errorHandler.handleError(error, { context: 'SyncFileManager.getAllSyncEntries' });
 			return [];
+		}
+	}
+
+	/**
+	 * Attempt recovery operations when sync issues are detected.
+	 */
+	async attemptRecovery(): Promise<boolean> {
+		try {
+			// Attempt to restore from backup
+			const recovered = await this.restoreFromBackup();
+			if (recovered) {
+				console.log('Successfully recovered from backup');
+				return true;
+			}
+
+			// If backup restoration fails, try to recreate the sync file
+			console.log('Backup restoration failed, attempting to recreate sync file');
+			await this.createSyncFile();
+
+			// Verify the new file is valid
+			const validationResult = await this.validateSyncFile();
+			return validationResult.isValid;
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'SyncFileManager.attemptRecovery' });
+			return false;
 		}
 	}
 }
