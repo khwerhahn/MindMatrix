@@ -57,7 +57,7 @@ export class InitialSyncManager {
 	constructor(
 		private vault: Vault,
 		private queueService: QueueService,
-		private syncFileManager: SyncFileManager,
+		private syncManager: SyncFileManager,
 		private metadataExtractor: MetadataExtractor,
 		private errorHandler: ErrorHandler,
 		private notificationManager: NotificationManager,
@@ -89,10 +89,9 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Filter files based on exclusion rules
+	 * Filters files based on exclusion rules.
 	 */
 	private filterExcludedFiles(files: TFile[]): TFile[] {
-
 		const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
 		const exclusions = this.options.exclusions || {
 			excludedFolders: [],
@@ -104,8 +103,7 @@ export class InitialSyncManager {
 		return files.filter(file => {
 			const filePath = file.path;
 			const fileName = file.name;
-
-			// First explicitly check for sync files
+			// Exclude sync files explicitly
 			if (
 				filePath === syncFilePath ||
 				filePath === '_mindmatrixsync.md' ||
@@ -113,49 +111,18 @@ export class InitialSyncManager {
 			) {
 				return false;
 			}
-
-			// Check excluded files
-			if (exclusions.excludedFiles && exclusions.excludedFiles.includes(fileName)) {
-				return false;
-			}
-
-			// Check excluded folders
-			if (exclusions.excludedFolders) {
-				for (const folder of exclusions.excludedFolders) {
-					const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
-					if (filePath.startsWith(normalizedFolder)) {
-						console.log(`[InitialSyncManager.filterExcludedFiles] Excluding file in excluded folder: ${filePath}`);
-						return false;
-					}
-				}
-			}
-
-			// Check excluded file types
-			if (exclusions.excludedFileTypes) {
-				for (const fileType of exclusions.excludedFileTypes) {
-					if (filePath.toLowerCase().endsWith(fileType.toLowerCase())) {
-						return false;
-					}
-				}
-			}
-
-			// Check excluded file prefixes
-			if (exclusions.excludedFilePrefixes) {
-				for (const prefix of exclusions.excludedFilePrefixes) {
-					if (fileName.startsWith(prefix)) {
-						return false;
-					}
-				}
-			}
-
+			if (exclusions.excludedFiles.includes(fileName)) return false;
+			if (exclusions.excludedFolders.some(folder => filePath.startsWith(folder.endsWith('/') ? folder : folder + '/'))) return false;
+			if (exclusions.excludedFileTypes.some(ext => filePath.toLowerCase().endsWith(ext.toLowerCase()))) return false;
+			if (exclusions.excludedFilePrefixes.some(prefix => fileName.startsWith(prefix))) return false;
 			return true;
 		});
 	}
 
 	/**
-	 * Start the initial sync process.
+	 * Starts the initial sync process.
 	 * Scans all markdown files in the vault and updates their status in the database.
-	 * If interrupted, resumes from the last processed file.
+	 * Resumes from the last processed file if the sync is interrupted.
 	 */
 	async startSync(): Promise<void> {
 		if (this.isRunning) {
@@ -165,37 +132,31 @@ export class InitialSyncManager {
 		try {
 			this.isRunning = true;
 			this.progress.startTime = Date.now();
+			console.log('Starting initial sync...');
 
-			// Get all markdown files from the vault
+			// Get and filter all markdown files
 			const allFiles = this.vault.getMarkdownFiles();
-
-			// Filter out excluded files
 			const files = this.filterExcludedFiles(allFiles);
-
-			// Additional logging for verification
-			const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
-
-			// Verify sync file is not included
-			const syncFileIncluded = files.some(file =>
-				file.path === syncFilePath ||
-				file.path === '_mindmatrixsync.md' ||
-				file.path === '_mindmatrixsync.md.backup'
-			);
-
 			this.resumeFileList = await this.sortFilesByPriority(files);
 			this.progress.totalFiles = this.resumeFileList.length;
-			// Create batches based on resumeFileList and lastProcessedIndex
+			console.log(`Total files to sync: ${this.progress.totalFiles}`);
+
+			// Create batches from the files starting from lastProcessedIndex
 			this.batches = this.createBatches(this.resumeFileList.slice(this.lastProcessedIndex));
 			this.progress.totalBatches = this.batches.length;
+			console.log(`Created ${this.progress.totalBatches} batches for syncing`);
+
 			// Process each batch concurrently with a limit
 			await this.processBatches();
+
 			new Notice('Initial sync completed successfully');
-			// Reset resume index upon successful completion
+			console.log('Initial sync completed');
+			// Reset resume index on success
 			this.lastProcessedIndex = 0;
 		} catch (error) {
 			this.errorHandler.handleError(error, { context: 'InitialSyncManager.startSync' });
 			new Notice('Initial sync failed. Check console for details.');
-			// Retain lastProcessedIndex so that a subsequent sync can resume from where it left off.
+			// Resume from the last processed index on failure
 		} finally {
 			this.isRunning = false;
 		}
@@ -203,17 +164,20 @@ export class InitialSyncManager {
 
 	/**
 	 * Sort files by priority based on rules.
+	 * Files matching higher priority rules are sorted to the front.
 	 */
 	private async sortFilesByPriority(files: TFile[]): Promise<TFile[]> {
 		return files.sort((a, b) => {
 			const priorityA = this.getFilePriority(a.path);
 			const priorityB = this.getFilePriority(b.path);
+			console.log(`Priority for ${a.path}: ${priorityA}, ${b.path}: ${priorityB}`);
 			return priorityB - priorityA;
 		});
 	}
 
 	/**
 	 * Determine the processing priority for a file.
+	 * Returns the highest matching rule priority or defaults to 1.
 	 */
 	private getFilePriority(path: string): number {
 		for (const rule of this.options.priorityRules) {
@@ -228,24 +192,9 @@ export class InitialSyncManager {
 	 * Create batches of files for processing.
 	 */
 	private createBatches(files: TFile[]): SyncBatch[] {
-
-		// Double-check for sync file as a safety measure
 		const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
-		const syncFileIncluded = files.some(file =>
-			file.path === syncFilePath ||
-			file.path === '_mindmatrixsync.md' ||
-			file.path === '_mindmatrixsync.md.backup'
-		);
-
-		if (syncFileIncluded) {
-			// Additional safety: filter here too
-			files = files.filter(file =>
-				file.path !== syncFilePath &&
-				file.path !== '_mindmatrixsync.md' &&
-				file.path !== '_mindmatrixsync.md.backup'
-			);
-		}
-
+		// Ensure sync file is not included
+		files = files.filter(file => file.path !== syncFilePath && file.path !== '_mindmatrixsync.md' && file.path !== '_mindmatrixsync.md.backup');
 		const batches: SyncBatch[] = [];
 		for (let i = 0; i < files.length; i += this.options.batchSize) {
 			const batchFiles = files.slice(i, i + this.options.batchSize);
@@ -261,11 +210,12 @@ export class InitialSyncManager {
 
 	/**
 	 * Process batches concurrently with a limit.
-	 * Also updates resume progress in case of interruption.
+	 * Updates resume progress in case of interruption.
 	 */
 	private async processBatches(): Promise<void> {
 		const activeBatches = new Set<string>();
 		for (const batch of this.batches) {
+			// Wait until active batches are below the concurrent limit
 			while (activeBatches.size >= this.options.maxConcurrentBatches) {
 				await new Promise(resolve => setTimeout(resolve, 100));
 			}
@@ -275,17 +225,14 @@ export class InitialSyncManager {
 					activeBatches.delete(batch.id);
 					// Update resume index after batch completes
 					this.lastProcessedIndex += batch.files.length;
+					console.log(`Completed ${batch.id}, resuming at index ${this.lastProcessedIndex}`);
 				})
 				.catch(error => {
-					this.errorHandler.handleError(error, {
-						context: 'InitialSyncManager.processBatch',
-						metadata: { batchId: batch.id }
-					});
+					this.errorHandler.handleError(error, { context: 'InitialSyncManager.processBatch', metadata: { batchId: batch.id } });
 					activeBatches.delete(batch.id);
-					// Optionally, mark batch as failed or retry later
 				});
 		}
-		// Wait for all batches to complete
+		// Wait until all batches are processed
 		while (activeBatches.size > 0) {
 			await new Promise(resolve => setTimeout(resolve, 100));
 		}
@@ -298,6 +245,7 @@ export class InitialSyncManager {
 		try {
 			batch.status = 'processing';
 			batch.startTime = Date.now();
+			console.log(`Processing ${batch.id} with ${batch.files.length} files`);
 			for (const file of batch.files) {
 				try {
 					await this.processFile(file);
@@ -305,14 +253,12 @@ export class InitialSyncManager {
 					batch.progress = (this.progress.processedFiles / this.progress.totalFiles) * 100;
 					this.updateProgressNotification();
 				} catch (error) {
-					this.errorHandler.handleError(error, {
-						context: 'InitialSyncManager.processFile',
-						metadata: { filePath: file.path }
-					});
+					this.errorHandler.handleError(error, { context: 'InitialSyncManager.processFile', metadata: { filePath: file.path } });
 				}
 			}
 			batch.status = 'completed';
 			batch.endTime = Date.now();
+			console.log(`Batch ${batch.id} completed in ${batch.endTime - (batch.startTime || 0)} ms`);
 		} catch (error) {
 			batch.status = 'failed';
 			throw error;
@@ -325,29 +271,23 @@ export class InitialSyncManager {
 	 */
 	private async processFile(file: TFile): Promise<void> {
 		try {
-			// Final safety check before processing
+			// Skip sync file if somehow reached here
 			const syncFilePath = this.options.syncFilePath || '_mindmatrixsync.md';
-			if (file.path === syncFilePath ||
-				file.path === '_mindmatrixsync.md' ||
-				file.path === '_mindmatrixsync.md.backup') {
-				return; // Skip processing entirely
+			if (file.path === syncFilePath || file.path === '_mindmatrixsync.md' || file.path === '_mindmatrixsync.md.backup') {
+				return;
 			}
-
-			// Extract metadata
 			const metadata = await this.metadataExtractor.extractMetadata(file);
-			// Calculate file hash for change detection
 			const fileHash = await this.calculateFileHash(file);
-			// Update file status in the database via Supabase if available, else fallback to sync file
+			// Update file status in the database if available; else, update sync file status.
 			if (this.supabaseService) {
 				await this.supabaseService.updateFileVectorizationStatus(metadata);
 			} else {
-				// Fallback: update sync file status (assuming updateSyncStatus method exists)
-				await this.syncFileManager.updateSyncStatus(file.path, 'PENDING', {
+				await this.syncManager.updateSyncStatus(file.path, 'PENDING', {
 					lastModified: file.stat.mtime,
 					hash: fileHash
 				});
 			}
-			// Queue file processing (e.g., for embedding generation)
+			// Queue file processing for further steps (like embedding generation)
 			await new Promise<void>((resolve, reject) => {
 				this.queueService.addTask({
 					id: file.path,
@@ -361,11 +301,11 @@ export class InitialSyncManager {
 					metadata,
 					data: {}
 				}).then(async () => {
-					// After processing, mark file as 'OK' in the database or sync file.
+					// Mark file as processed in the database or sync file.
 					if (this.supabaseService) {
 						await this.supabaseService.updateFileVectorizationStatus(metadata);
 					} else {
-						await this.syncFileManager.updateSyncStatus(file.path, 'OK', {
+						await this.syncManager.updateSyncStatus(file.path, 'OK', {
 							lastModified: file.stat.mtime,
 							hash: fileHash
 						});
@@ -373,11 +313,9 @@ export class InitialSyncManager {
 					resolve();
 				}).catch(reject);
 			});
+			console.log(`Processed file: ${file.path}`);
 		} catch (error) {
-			this.errorHandler.handleError(error, {
-				context: 'InitialSyncManager.processFile',
-				metadata: { filePath: file.path }
-			});
+			this.errorHandler.handleError(error, { context: 'InitialSyncManager.processFile', metadata: { filePath: file.path } });
 			throw error;
 		}
 	}
@@ -386,13 +324,18 @@ export class InitialSyncManager {
 	 * Calculate SHA-256 hash of a file's content.
 	 */
 	private async calculateFileHash(file: TFile): Promise<string> {
-		const content = await this.vault.read(file);
-		const encoder = new TextEncoder();
-		const data = encoder.encode(content);
-		const buffer = await crypto.subtle.digest('SHA-256', data);
-		return Array.from(new Uint8Array(buffer))
-			.map(b => b.toString(16).padStart(2, '0'))
-			.join('');
+		try {
+			const content = await this.vault.read(file);
+			const encoder = new TextEncoder();
+			const data = encoder.encode(content);
+			const buffer = await crypto.subtle.digest('SHA-256', data);
+			return Array.from(new Uint8Array(buffer))
+				.map(b => b.toString(16).padStart(2, '0'))
+				.join('');
+		} catch (error) {
+			this.errorHandler.handleError(error, { context: 'InitialSyncManager.calculateFileHash', metadata: { filePath: file.path } });
+			return '';
+		}
 	}
 
 	/**
@@ -425,14 +368,7 @@ export class InitialSyncManager {
 	}
 
 	/**
-	 * Update sync progress notifications.
-	 */
-	private updateProgressNotificationBatch(): void {
-		this.updateProgressNotification();
-	}
-
-	/**
-	 * Stop the initial sync process.
+	 * Stops the initial sync process.
 	 */
 	stop(): void {
 		this.isRunning = false;
@@ -440,6 +376,7 @@ export class InitialSyncManager {
 			clearTimeout(this.processingTimeout);
 			this.processingTimeout = null;
 		}
+		new Notice('Initial sync stopped');
 	}
 
 	/**

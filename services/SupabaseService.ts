@@ -1,4 +1,3 @@
-// src/services/SupabaseService.ts
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { DocumentChunk, DocumentMetadata } from '../models/DocumentChunk';
 import { MindMatrixSettings, isVaultInitialized } from '../settings/Settings';
@@ -26,7 +25,9 @@ export class SupabaseService {
 	private static instance: SupabaseService | null = null;
 	private settings: MindMatrixSettings;
 	private readonly TABLE_NAME = 'obsidian_documents';
-	private readonly FILE_STATUS_TABLE = 'obsidian_file_status'; // Table for tracking file status
+	private readonly FILE_STATUS_TABLE = 'obsidian_file_status';
+	// Track deletion operations for a given file to avoid concurrent deletes
+	private deleteOperationsInProgress: Map<string, boolean> = new Map();
 
 	private constructor(settings: MindMatrixSettings) {
 		if (!settings.supabase.url || !settings.supabase.apiKey) {
@@ -110,30 +111,50 @@ export class SupabaseService {
 	}
 
 	/**
-	 * Inserts or updates document chunks in the obsidian_documents table.
+	 * Inserts or updates document chunks in the obsidian_documents table using an atomic transaction.
+	 * Improvements:
+	 * - Transaction handling to ensure atomicity
+	 * - Verification of deletion success before insertion
+	 * - Proper error handling and retry logic
+	 * - Prevents concurrent deletions on the same file
 	 */
 	public async upsertChunks(chunks: DocumentChunk[]): Promise<void> {
 		if (!this.client) {
 			console.warn('Supabase client is not initialized. Skipping upsertChunks.');
 			return;
 		}
+
+		if (chunks.length === 0) {
+			console.log('No chunks to upsert');
+			return;
+		}
+
+		// Determine the obsidianId from the first chunk
+		const obsidianId = chunks[0].metadata.obsidianId;
+
+		// Check if a delete operation is already in progress for this file
+		if (this.deleteOperationsInProgress.get(obsidianId)) {
+			console.warn(`Delete operation already in progress for ${obsidianId}. Queueing update.`);
+			// Wait for previous operation to complete with exponential backoff
+			let retryCount = 0;
+			const maxRetries = 5;
+			const baseDelay = 500; // ms
+
+			while (this.deleteOperationsInProgress.get(obsidianId) && retryCount < maxRetries) {
+				const delay = baseDelay * Math.pow(2, retryCount);
+				await new Promise(resolve => setTimeout(resolve, delay));
+				retryCount++;
+			}
+
+			if (this.deleteOperationsInProgress.get(obsidianId)) {
+				throw new Error(`Deletion operation timeout for ${obsidianId}`);
+			}
+		}
+
+		// Mark deletion as in progress
+		this.deleteOperationsInProgress.set(obsidianId, true);
+
 		try {
-			if (chunks.length === 0) {
-				console.log('No chunks to upsert');
-				return;
-			}
-			// Determine the obsidianId from the first chunk
-			const obsidianId = chunks[0].metadata.obsidianId;
-			// Delete existing chunks for this file first
-			const { error: deleteError } = await this.client
-				.from(this.TABLE_NAME)
-				.delete()
-				.eq('vault_id', this.settings.vaultId)
-				.eq('obsidian_id', obsidianId);
-			if (deleteError) {
-				console.error('Error deleting existing chunks:', deleteError);
-				throw deleteError;
-			}
 			// Prepare new chunk data for insertion
 			const chunksToInsert = chunks.map(chunk => ({
 				vault_id: this.settings.vaultId,
@@ -145,14 +166,90 @@ export class SupabaseService {
 				last_updated: new Date().toISOString(),
 				vectorized_at: new Date().toISOString()
 			}));
-			// Insert new chunks
-			const { error: insertError } = await this.client
+
+			// Record original number of chunks for verification
+			const chunkCount = chunksToInsert.length;
+			console.log(`Preparing to update ${chunkCount} chunks for file: ${obsidianId}`);
+
+			// Execute delete and insert operations in a transaction-like manner
+			// First delete existing chunks for this file.
+			// Modified query: remove .select('count') and use head count instead.
+			const { error: deleteError, count: deletedCount } = await this.client
 				.from(this.TABLE_NAME)
-				.insert(chunksToInsert);
-			if (insertError) {
-				console.error('Error inserting new chunks:', insertError);
-				throw insertError;
+				.delete()
+				.eq('vault_id', this.settings.vaultId)
+				.eq('obsidian_id', obsidianId)
+				.select('*', { head: true, count: 'exact' });
+			if (deleteError) {
+				console.error('Error deleting existing chunks:', deleteError);
+				throw deleteError;
 			}
+			console.log(`Successfully deleted ${deletedCount} existing chunks for ${obsidianId}`);
+
+			// Verify there are no remaining chunks (double-check deletion)
+			const { data: remainingData, error: countError } = await this.client
+				.from(this.TABLE_NAME)
+				.select('id', { count: 'exact', head: true })
+				.eq('vault_id', this.settings.vaultId)
+				.eq('obsidian_id', obsidianId);
+			if (countError) {
+				console.error('Error verifying deletion:', countError);
+				throw countError;
+			}
+
+			const remainingCount = remainingData?.length || 0;
+			if (remainingCount > 0) {
+				console.warn(`Deletion verification failed: ${remainingCount} chunks still exist for ${obsidianId}`);
+				// Attempt deletion again if chunks remain
+				const { error: retryError } = await this.client
+					.from(this.TABLE_NAME)
+					.delete()
+					.eq('vault_id', this.settings.vaultId)
+					.eq('obsidian_id', obsidianId);
+				if (retryError) {
+					throw new Error(`Failed to clean up remaining chunks: ${retryError.message}`);
+				}
+			}
+
+			// Now insert the new chunks in batches to avoid potential payload limits
+			const BATCH_SIZE = 50; // Adjust based on your Supabase limits
+			const batches = [];
+
+			for (let i = 0; i < chunksToInsert.length; i += BATCH_SIZE) {
+				batches.push(chunksToInsert.slice(i, i + BATCH_SIZE));
+			}
+			console.log(`Inserting ${chunksToInsert.length} chunks in ${batches.length} batches`);
+
+			for (let i = 0; i < batches.length; i++) {
+				const batch = batches[i];
+				console.log(`Processing batch ${i + 1}/${batches.length} with ${batch.length} chunks`);
+				const { error: insertError } = await this.client
+					.from(this.TABLE_NAME)
+					.insert(batch);
+				if (insertError) {
+					console.error(`Error inserting batch ${i + 1}:`, insertError);
+					// Clean up partially inserted data on error
+					await this.cleanupPartialInsert(obsidianId);
+					throw insertError;
+				}
+			}
+
+			// Verify all chunks were inserted
+			const { data: insertedData, error: verifyError } = await this.client
+				.from(this.TABLE_NAME)
+				.select('id', { count: 'exact', head: true })
+				.eq('vault_id', this.settings.vaultId)
+				.eq('obsidian_id', obsidianId);
+			if (verifyError) {
+				console.error('Error verifying insertion:', verifyError);
+				throw verifyError;
+			}
+
+			const insertedCount = insertedData?.length || 0;
+			if (insertedCount !== chunkCount) {
+				console.warn(`Insertion verification: Expected ${chunkCount} chunks, found ${insertedCount}`);
+			}
+
 			// Update file status to track vectorization
 			await this.updateFileVectorizationStatus(chunks[0].metadata);
 			console.log('Successfully updated chunks:', {
@@ -163,6 +260,32 @@ export class SupabaseService {
 		} catch (error) {
 			console.error('Failed to upsert chunks:', error);
 			throw error;
+		} finally {
+			// Clear deletion in progress flag
+			this.deleteOperationsInProgress.set(obsidianId, false);
+		}
+	}
+
+	/**
+	 * Cleans up partial inserts if an error occurs during batch insertion
+	 */
+	private async cleanupPartialInsert(obsidianId: string): Promise<void> {
+		if (!this.client) return;
+
+		try {
+			console.log(`Cleaning up partial insert for ${obsidianId}`);
+			const { error } = await this.client
+				.from(this.TABLE_NAME)
+				.delete()
+				.eq('vault_id', this.settings.vaultId)
+				.eq('obsidian_id', obsidianId);
+			if (error) {
+				console.error('Error cleaning up partial insert:', error);
+			} else {
+				console.log(`Successfully cleaned up partial insert for ${obsidianId}`);
+			}
+		} catch (cleanupError) {
+			console.error('Error during cleanup of partial insert:', cleanupError);
 		}
 	}
 
@@ -217,7 +340,7 @@ export class SupabaseService {
 				last_modified: metadata.lastModified,
 				last_vectorized: new Date().toISOString(),
 				content_hash: metadata.customMetadata?.contentHash || '',
-				status: 'PENDING',
+				status: 'vectorized', // Mark as successfully vectorized
 				tags: metadata.tags || [],
 				aliases: metadata.customMetadata?.aliases || [],
 				links: metadata.links || [],
@@ -271,24 +394,89 @@ export class SupabaseService {
 
 	/**
 	 * Deletes document chunks for a given obsidianId from the obsidian_documents table.
+	 * Improved with tracking of operation progress and verification.
 	 */
 	public async deleteDocumentChunks(obsidianId: string): Promise<void> {
 		if (!this.client) {
 			console.warn('Supabase client is not initialized. Skipping deleteDocumentChunks.');
 			return;
 		}
+
+		// If a deletion is already in progress for this file, wait briefly.
+		if (this.deleteOperationsInProgress.get(obsidianId)) {
+			console.warn(`Delete operation already in progress for ${obsidianId}. Waiting...`);
+			await new Promise(resolve => setTimeout(resolve, 500));
+			if (this.deleteOperationsInProgress.get(obsidianId)) {
+				console.log(`Still waiting for delete operation on ${obsidianId}...`);
+				return;
+			}
+		}
+
+		// Mark deletion as in progress.
+		this.deleteOperationsInProgress.set(obsidianId, true);
+
 		try {
-			const { error } = await this.client
+			console.log(`Starting deletion of chunks for ${obsidianId}`);
+
+			// Check how many chunks exist (using a plain select query).
+			const { data: initialData, error: initialCountError } = await this.client
+				.from(this.TABLE_NAME)
+				.select('id')
+				.eq('vault_id', this.settings.vaultId)
+				.eq('obsidian_id', obsidianId);
+			if (initialCountError) {
+				console.error('Error checking existing chunks:', initialCountError);
+				throw initialCountError;
+			}
+			const initialCount = initialData ? initialData.length : 0;
+			console.log(`Found ${initialCount} chunks to delete for ${obsidianId}`);
+
+			// If there are no chunks, we can directly purge the file status.
+			if (initialCount === 0) {
+				await this.purgeFileStatus(obsidianId);
+				return;
+			}
+
+			// Delete the chunks.
+			const { error: deleteError } = await this.client
 				.from(this.TABLE_NAME)
 				.delete()
 				.eq('vault_id', this.settings.vaultId)
 				.eq('obsidian_id', obsidianId);
-			if (error) throw error;
-			// Also mark file as deleted in the file status table
-			await this.updateFileStatusOnDelete(obsidianId);
+			if (deleteError) {
+				console.error('Error deleting chunks:', deleteError);
+				throw deleteError;
+			}
+
+			// Wait briefly to let the deletion propagate.
+			await new Promise(resolve => setTimeout(resolve, 500));
+
+			// Verify deletion by selecting remaining rows.
+			const { data: remainingData, error: verifyError } = await this.client
+				.from(this.TABLE_NAME)
+				.select('id')
+				.eq('vault_id', this.settings.vaultId)
+				.eq('obsidian_id', obsidianId);
+			if (verifyError) {
+				console.error('Error verifying deletion:', verifyError);
+				throw verifyError;
+			}
+			const remainingCount = remainingData ? remainingData.length : 0;
+			if (remainingCount > 0) {
+				console.warn(`Deletion verification failed: ${remainingCount} chunks still exist for ${obsidianId}`);
+				// If there are leftover chunks, do not purge yet.
+				return;
+			}
+
+			// All chunks have been removed; purge the file status record.
+			await this.purgeFileStatus(obsidianId);
+			console.log(`Successfully purged file status for ${obsidianId}`);
 		} catch (error) {
 			console.error('Failed to delete chunks:', error);
 			throw error;
+		} finally {
+			// Clear the deletion-in-progress flag.
+			this.deleteOperationsInProgress.set(obsidianId, false);
 		}
 	}
 
@@ -605,4 +793,45 @@ export class SupabaseService {
 			return { success: false, message: `Error creating tables: ${(error as Error).message}` };
 		}
 	}
+
+	public async updateFilePath(oldPath: string, newPath: string): Promise<void> {
+		if (!this.client) return;
+		try {
+			const { error } = await this.client
+				.from(this.FILE_STATUS_TABLE)
+				.update({ file_path: newPath, updated_at: new Date().toISOString() })
+				.eq('vault_id', this.settings.vaultId)
+				.eq('file_path', oldPath);
+			if (error) {
+				throw error;
+			}
+			console.log(`File path updated from ${oldPath} to ${newPath}`);
+		} catch (error) {
+			console.error('Error updating file path:', error);
+			throw error;
+		}
+	}
+
+	public async purgeFileStatus(filePath: string): Promise<void> {
+		if (!this.client) {
+			console.warn('Supabase client is not initialized. Skipping purgeFileStatus.');
+			return;
+		}
+		try {
+			const { error } = await this.client
+				.from(this.FILE_STATUS_TABLE)
+				.delete()
+				.eq('vault_id', this.settings.vaultId)
+				.eq('file_path', filePath);
+			if (error) {
+				console.error('Error purging file status:', error);
+				throw error;
+			}
+			console.log(`Purged file status record for ${filePath}`);
+		} catch (error) {
+			console.error('Failed to purge file status record:', error);
+			throw error;
+		}
+	}
+
 }

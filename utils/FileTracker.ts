@@ -22,6 +22,7 @@ export class FileTracker {
 	private readonly syncFilePath: string;
 	// Optional offline queue manager for offline operations
 	private offlineQueueManager: OfflineQueueManager | null = null;
+	private maxFileSizeBytes: number = 10 * 1024 * 1024;
 
 	/**
 	 * @param vault The Obsidian vault instance.
@@ -129,10 +130,56 @@ export class FileTracker {
 		await this.queueEvent(event);
 	}
 
+	/**
+	 * Handle file modification events.
+	 * Enhanced with change detection and intelligent debouncing.
+	 */
 	async handleModify(file: TAbstractFile): Promise<void> {
-		if (!(file instanceof TFile) || !this.shouldTrackFile(file.path)) return;
-		const event: FileEvent = { type: 'modify', file, timestamp: Date.now() };
-		await this.queueEvent(event);
+		if (!(file instanceof TFile) || !this.shouldTrackFile(file)) return;
+
+		try {
+			// Check if this file was recently modified
+			const recentChange = this.recentChanges.get(file.path);
+			const currentTime = Date.now();
+
+			// Calculate hash for change detection
+			const hash = await this.calculateFileHash(file);
+
+			// If the file was recently processed and content hasn't changed, debounce more aggressively
+			if (recentChange &&
+				recentChange.hash === hash &&
+				(currentTime - recentChange.lastProcessed) < (this.processingTimeout * 2)) {
+
+				console.log(`Skipping redundant update for ${file.path} - content unchanged`);
+				return;
+			}
+
+			// If file was recently processed but content has changed, we'll queue it
+			if (recentChange) {
+				console.log(`Content changed for ${file.path}. Previous hash: ${recentChange.hash.substring(0, 8)}..., New hash: ${hash.substring(0, 8)}...`);
+			}
+
+			// Update the recent changes record
+			this.recentChanges.set(file.path, {
+				lastModified: file.stat.mtime,
+				hash,
+				lastProcessed: currentTime
+			});
+
+			const event: FileEvent = {
+				type: 'modify',
+				file,
+				timestamp: currentTime,
+				hash
+			};
+
+			await this.queueEvent(event);
+		} catch (error) {
+			this.errorHandler.handleError(error, {
+				context: 'FileTracker.handleModify',
+				metadata: { filePath: file.path }
+			});
+		}
 	}
 
 	async handleDelete(file: TAbstractFile): Promise<void> {
@@ -192,19 +239,55 @@ export class FileTracker {
 		}
 	}
 
+	/**
+	 * Queue an event for processing with intelligent debouncing.
+	 */
 	private async queueEvent(event: FileEvent): Promise<void> {
+		// Add the event to the queue
 		this.eventQueue.push(event);
+
+		// If not already processing, start a timer based on event type
 		if (!this.isProcessing) {
-			setTimeout(() => this.processEventQueue(), this.processingTimeout);
+			// Use standard debounce time for most events
+			let debounceTime = this.processingTimeout;
+
+			// For delete and rename events, use a shorter debounce time
+			if (event.type === 'delete' || event.type === 'rename') {
+				debounceTime = Math.min(debounceTime / 2, 500);
+			}
+
+			// For rapid typing scenarios, use a longer debounce time
+			if (event.type === 'modify') {
+				const recentEvents = this.eventQueue.filter(e =>
+					e.file.path === event.file.path &&
+					e.type === 'modify' &&
+					(event.timestamp - e.timestamp) < 5000
+				);
+
+				if (recentEvents.length > 3) {
+					// Multiple rapid changes detected, increase debounce time
+					debounceTime = Math.max(debounceTime * 2, 3000);
+					console.log(`Increased debounce time to ${debounceTime}ms for rapid changes to ${event.file.path}`);
+				}
+			}
+
+			setTimeout(() => this.processEventQueue(), debounceTime);
 		}
 	}
 
+	/**
+	 * Process the event queue with improved conflict handling.
+	 */
 	private async processEventQueue(): Promise<void> {
 		if (this.isProcessing || this.eventQueue.length === 0) return;
+
 		this.isProcessing = true;
+		console.log(`Processing ${this.eventQueue.length} queued events`);
+
 		try {
-			// Group events by file path.
+			// Group events by file path for intelligent processing
 			const eventsByPath = new Map<string, FileEvent[]>();
+
 			for (const event of this.eventQueue) {
 				const path = event.file.path;
 				if (!eventsByPath.has(path)) {
@@ -212,57 +295,125 @@ export class FileTracker {
 				}
 				eventsByPath.get(path)?.push(event);
 			}
-			// Process events for each file.
-			for (const [path, events] of eventsByPath) {
-				await this.processFileEvents(path, events);
+
+			// Process events for each file with proper prioritization
+			const paths = Array.from(eventsByPath.keys());
+
+			// Process delete operations first
+			const deleteFirst = paths.sort((a, b) => {
+				const aHasDelete = eventsByPath.get(a)?.some(e => e.type === 'delete') ?? false;
+				const bHasDelete = eventsByPath.get(b)?.some(e => e.type === 'delete') ?? false;
+
+				if (aHasDelete && !bHasDelete) return -1;
+				if (!aHasDelete && bHasDelete) return 1;
+				return 0;
+			});
+
+			for (const path of deleteFirst) {
+				const events = eventsByPath.get(path);
+				if (events) {
+					await this.processFileEvents(path, events);
+				}
 			}
-			// Clear the event queue.
+
+			// Clear the event queue
 			this.eventQueue = [];
+
 		} catch (error) {
 			this.errorHandler.handleError(error, { context: 'FileTracker.processEventQueue' });
 		} finally {
 			this.isProcessing = false;
+
+			// If events were added during processing, trigger another process cycle
+			if (this.eventQueue.length > 0) {
+				setTimeout(() => this.processEventQueue(), 100);
+			}
 		}
 	}
 
+	/**
+	 * Process all events for a single file with improved change detection.
+	 */
 	private async processFileEvents(path: string, events: FileEvent[]): Promise<void> {
+		// Sort events by timestamp to ensure correct order
 		events.sort((a, b) => a.timestamp - b.timestamp);
+
+		// Get the final event after all changes
 		const finalEvent = events[events.length - 1];
+
+		console.log(`Processing ${events.length} events for ${path}, final event: ${finalEvent.type}`);
+
 		try {
-			if (finalEvent.type !== 'delete') {
-				const newHash = await this.calculateFileHash(finalEvent.file);
-				let needsVectorizing = true;
-				if (this.supabaseService) {
-					try {
-						needsVectorizing = await this.supabaseService.needsVectorizing(
-							path,
-							finalEvent.file.stat.mtime,
-							newHash
-						);
-					} catch (error) {
-						console.error('Error checking if file needs vectorizing:', error);
-						needsVectorizing = true;
+			// Delete events are handled immediately in handleDelete, no further processing needed
+			if (finalEvent.type === 'delete') {
+				console.log(`Skipping further processing for deleted file: ${path}`);
+				return;
+			}
+
+			// Get the hash either from the event or calculate it
+			const newHash = finalEvent.hash || await this.calculateFileHash(finalEvent.file);
+
+			// Determine if the file needs vectorizing based on available services
+			let needsVectorizing = true;
+
+			if (this.supabaseService) {
+				try {
+					needsVectorizing = await this.supabaseService.needsVectorizing(
+						path,
+						finalEvent.file.stat.mtime,
+						newHash
+					);
+
+					if (!needsVectorizing) {
+						console.log(`File ${path} does not need vectorizing - no significant changes`);
 					}
-				} else {
-					const syncStatus = await this.syncManager.getSyncStatus(path);
-					if (syncStatus && syncStatus.hash === newHash && finalEvent.file.stat.mtime <= syncStatus.lastModified && syncStatus.status !== 'PENDING') {
-						needsVectorizing = false;
-					}
+				} catch (error) {
+					console.error('Error checking if file needs vectorizing:', error);
+					needsVectorizing = true;
 				}
-				if (needsVectorizing) {
-					const metadata = await this.createFileMetadata(finalEvent.file);
-					if (this.supabaseService) {
-						await this.supabaseService.updateFileVectorizationStatus(metadata);
-					} else {
-						await this.syncManager.updateSyncStatus(path, 'PENDING', {
-							lastModified: finalEvent.file.stat.mtime,
-							hash: newHash
-						});
-					}
+			} else {
+				// Fallback to sync file status check
+				const syncStatus = await this.syncManager.getSyncStatus(path);
+
+				if (syncStatus &&
+					syncStatus.hash === newHash &&
+					finalEvent.file.stat.mtime <= syncStatus.lastModified &&
+					syncStatus.status !== 'PENDING') {
+
+					needsVectorizing = false;
+					console.log(`File ${path} does not need vectorizing according to sync file status`);
+				}
+			}
+
+			// Update tracking regardless of whether vectorization is needed
+			this.recentChanges.set(path, {
+				lastModified: finalEvent.file.stat.mtime,
+				hash: newHash,
+				lastProcessed: Date.now()
+			});
+
+			// Only proceed with vectorization if needed
+			if (needsVectorizing) {
+				console.log(`Updating status for ${path} with hash ${newHash.substring(0, 8)}...`);
+
+				// Create metadata with content hash for reliable change detection
+				const metadata = await this.createFileMetadata(finalEvent.file);
+				metadata.customMetadata.contentHash = newHash;
+
+				if (this.supabaseService) {
+					await this.supabaseService.updateFileVectorizationStatus(metadata);
+				} else {
+					await this.syncManager.updateSyncStatus(path, 'PENDING', {
+						lastModified: finalEvent.file.stat.mtime,
+						hash: newHash
+					});
 				}
 			}
 		} catch (error) {
-			this.errorHandler.handleError(error, { context: 'FileTracker.processFileEvents', metadata: { path, eventType: finalEvent.type } });
+			this.errorHandler.handleError(error, {
+				context: 'FileTracker.processFileEvents',
+				metadata: { path, eventType: finalEvent.type }
+			});
 		}
 	}
 
@@ -329,17 +480,85 @@ export class FileTracker {
 	}
 
 
-	private shouldTrackFile(filePath: string): boolean {
-		// Extract the file name from the path
-		const fileName = filePath.split('/').pop()?.toLowerCase() || filePath.toLowerCase();
-
-		// Check against the sync file names
-		if (
-			fileName === '_mindmatrixsync.md' ||
-			fileName === '_mindmatrixsync.md.backup'
-		) {
+	/**
+	 * Determine if a file should be tracked and processed.
+	 * Enhanced with additional exclusion logic.
+	 */
+	private shouldTrackFile(file: TFile): boolean {
+		if (!this.settings || !isVaultInitialized(this.settings)) {
 			return false;
 		}
+
+		if (!this.settings.enableAutoSync) {
+			return false;
+		}
+
+		// Get combined exclusions (system + user)
+		const allExclusions = getAllExclusions(this.settings);
+
+		const filePath = file.path;
+		const fileName = file.name;
+
+		// Check if this is the sync file directly
+		if (filePath === this.settings.sync.syncFilePath ||
+			filePath === this.settings.sync.syncFilePath + '.backup') {
+			return false;
+		}
+
+		// Check if the file is binary or non-text based
+		const isBinaryFile = this.isBinaryFile(fileName);
+		if (isBinaryFile) {
+			console.log(`Skipping binary file: ${fileName}`);
+			return false;
+		}
+
+		// Check file size constraints - skip extremely large files
+		if (file.stat.size > this.maxFileSizeBytes) {
+			console.log(`Skipping file exceeding size limit: ${fileName} (${file.stat.size} bytes)`);
+			return false;
+		}
+
+		// Check excluded files
+		if (Array.isArray(allExclusions.excludedFiles) &&
+			allExclusions.excludedFiles.includes(fileName)) {
+			console.log('Skipping excluded file:', fileName);
+			return false;
+		}
+
+		// Check excluded folders
+		if (Array.isArray(allExclusions.excludedFolders)) {
+			const isExcludedFolder = allExclusions.excludedFolders.some(folder => {
+				const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
+				return filePath.startsWith(normalizedFolder);
+			});
+			if (isExcludedFolder) {
+				console.log('Skipping file in excluded folder:', filePath);
+				return false;
+			}
+		}
+
+		// Check excluded file types
+		if (Array.isArray(allExclusions.excludedFileTypes)) {
+			const isExcludedType = allExclusions.excludedFileTypes.some(
+				ext => filePath.toLowerCase().endsWith(ext.toLowerCase())
+			);
+			if (isExcludedType) {
+				console.log('Skipping excluded file type:', filePath);
+				return false;
+			}
+		}
+
+		// Check excluded file prefixes
+		if (Array.isArray(allExclusions.excludedFilePrefixes)) {
+			const isExcludedPrefix = allExclusions.excludedFilePrefixes.some(
+				prefix => fileName.startsWith(prefix)
+			);
+			if (isExcludedPrefix) {
+				console.log('Skipping file with excluded prefix:', fileName);
+				return false;
+			}
+		}
+
 		return true;
 	}
 
@@ -377,5 +596,22 @@ export class FileTracker {
 	 */
 	public setProcessingTimeout(timeout: number): void {
 		this.processingTimeout = timeout;
+	}
+
+	/**
+     * Helper method to determine if a file is likely binary based on extension
+    */
+	private isBinaryFile(fileName: string): boolean {
+		const binaryExtensions = [
+			'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.ico',
+			'.pdf', '.zip', '.7z', '.rar', '.tar', '.gz',
+			'.mp3', '.mp4', '.wav', '.ogg', '.flac',
+			'.exe', '.dll', '.so', '.dylib',
+			'.db', '.sqlite'
+		];
+
+		return binaryExtensions.some(ext =>
+			fileName.toLowerCase().endsWith(ext)
+		);
 	}
 }

@@ -1,4 +1,4 @@
-// src/utils/TextSplitter.ts
+//TextSplitter.ts
 import {
 	DocumentChunk,
 	DocumentMetadata,
@@ -28,9 +28,7 @@ export class TextSplitter {
 		this.metadataExtractor = metadataExtractor || new MetadataExtractor();
 	}
 
-	/**
-	 * Returns the current chunking settings.
-	 */
+	/** Returns the current chunking settings. */
 	public getSettings(): { chunkSize: number; chunkOverlap: number; minChunkSize: number } {
 		return this.settings;
 	}
@@ -50,15 +48,27 @@ export class TextSplitter {
 	/**
 	 * Splits a document into chunks while enhancing metadata.
 	 * Extracts YAML front matter if present, and then uses the MetadataExtractor
-	 * to merge additional metadata (e.g., tags, aliases, links) into the base metadata
-	 * without modifying the original note content.
+	 * to merge additional metadata (e.g., tags, aliases, links) into the base metadata.
+	 *
+	 * @param content The full text content of the document.
+	 * @param metadata Base metadata for the document.
+	 * @param abortSignal Optional AbortSignal to cancel the operation.
+	 * @returns An array of DocumentChunk.
 	 */
-	public async splitDocument(content: string, metadata: DocumentMetadata): Promise<DocumentChunk[]> {
+	public async splitDocument(
+		content: string,
+		metadata: DocumentMetadata,
+		abortSignal?: AbortSignal
+	): Promise<DocumentChunk[]> {
+		const performanceMetrics: Record<string, number> = {};
+		const overallStart = performance.now();
+
 		try {
-			console.log('Starting document split:', {
-				contentLength: content.length,
-				settings: this.settings,
-			});
+			console.log('Starting document split', { contentLength: content.length, settings: this.settings });
+
+			if (abortSignal?.aborted) {
+				throw new Error('Document splitting aborted before start');
+			}
 
 			if (!content?.trim()) {
 				console.log('Empty content received');
@@ -78,13 +88,16 @@ export class TextSplitter {
 						frontMatter
 					);
 					metadata = { ...metadata, ...enhancedMetadata };
-					console.log('Front matter extracted and metadata enhanced:', { frontMatter });
+					console.log('Front matter extracted and metadata enhanced', { frontMatter });
 				} catch (error) {
-					console.warn('Failed to parse front matter:', error);
+					console.warn('Failed to parse front matter', error);
 				}
 			}
 
 			const trimmedContent = content.trim();
+			if (abortSignal?.aborted) {
+				throw new Error('Document splitting aborted after front matter processing');
+			}
 
 			// If content is smaller than the chunk size, return as a single chunk.
 			if (trimmedContent.length <= Math.max(this.settings.minChunkSize, this.settings.chunkSize)) {
@@ -92,16 +105,15 @@ export class TextSplitter {
 					console.log('No content after trimming, returning empty array');
 					return [];
 				}
-				console.log('Content is smaller than chunk size, creating single chunk:', {
+				console.log('Content is smaller than chunk size, creating single chunk', {
 					contentLength: trimmedContent.length,
 					chunkSize: this.settings.chunkSize,
 					minChunkSize: this.settings.minChunkSize,
 				});
 				const singleChunk = this.createChunk(trimmedContent, 0, metadata);
-				console.log('Created single chunk:', {
-					chunkSize: singleChunk.content.length,
-					preview: singleChunk.content.substring(0, 100),
-				});
+				performanceMetrics.singleChunkTime = performance.now() - overallStart;
+				console.log('Created single chunk', { chunkSize: singleChunk.content.length, preview: singleChunk.content.substring(0, 100) });
+				console.log(`Document split completed in ${performance.now() - overallStart} ms`, performanceMetrics);
 				return [singleChunk];
 			}
 
@@ -109,15 +121,23 @@ export class TextSplitter {
 			const paragraphs = content.split(this.PARAGRAPH_BOUNDARY)
 				.map(p => p.trim())
 				.filter(p => p.length > 0);
-			console.log('Split into paragraphs:', {
-				paragraphCount: paragraphs.length,
-				paragraphs: paragraphs.map(p => p.substring(0, 100)),
-			});
+			console.log('Split into paragraphs', { paragraphCount: paragraphs.length, paragraphs: paragraphs.map(p => p.substring(0, 100)) });
+
+			if (abortSignal?.aborted) {
+				throw new Error('Document splitting aborted after paragraph split');
+			}
 
 			let chunks: DocumentChunk[] = [];
 			let currentChunk = '';
 			let chunkIndex = 0;
+
+			// Process each paragraph
 			for (const paragraph of paragraphs) {
+				if (abortSignal?.aborted) {
+					// Cleanup any partial results if aborted
+					chunks = [];
+					throw new Error('Document splitting aborted during processing');
+				}
 				// If paragraph is larger than the chunk size, split it into sentences.
 				if (paragraph.length >= this.settings.chunkSize) {
 					if (currentChunk) {
@@ -127,6 +147,10 @@ export class TextSplitter {
 					const sentences = paragraph.split(this.SENTENCE_BOUNDARY);
 					let sentenceChunk = '';
 					for (const sentence of sentences) {
+						if (abortSignal?.aborted) {
+							chunks = [];
+							throw new Error('Document splitting aborted during sentence processing');
+						}
 						const trimmedSentence = sentence.trim();
 						if (!trimmedSentence) continue;
 						if ((sentenceChunk + ' ' + trimmedSentence).length > this.settings.chunkSize) {
@@ -172,14 +196,16 @@ export class TextSplitter {
 				chunks.push(this.createChunk(currentChunk, chunkIndex++, metadata));
 			}
 			if (chunks.length === 0 && trimmedContent.length > 0) {
-				console.log('Creating fallback chunk for content:', { contentLength: trimmedContent.length });
+				console.log('Creating fallback chunk for content', { contentLength: trimmedContent.length });
 				chunks.push(this.createChunk(trimmedContent, 0, metadata));
 			}
 			// Apply overlap between chunks if configured.
 			if (this.settings.chunkOverlap > 0 && chunks.length > 1) {
 				chunks = this.applyOverlap(chunks);
 			}
-			console.log('Finished creating chunks:', {
+
+			performanceMetrics.totalSplittingTime = performance.now() - overallStart;
+			console.log('Finished creating chunks', {
 				chunkCount: chunks.length,
 				chunkSizes: chunks.map(c => c.content.length),
 				chunkPreviews: chunks.map(c => ({
@@ -187,10 +213,12 @@ export class TextSplitter {
 					size: c.content.length,
 					preview: c.content.substring(0, 100),
 				})),
+				performanceMetrics
 			});
 			return chunks;
-		} catch (error) {
-			console.error('Error in splitDocument:', error);
+		} catch (error: any) {
+			console.error('Error in splitDocument', error);
+			// Ensure any partial results are cleaned up
 			throw {
 				type: DocumentProcessingError.CHUNKING_ERROR,
 				message: 'Error occurred during document chunking',
@@ -202,7 +230,7 @@ export class TextSplitter {
 	private createChunk(content: string, index: number, metadata: DocumentMetadata): DocumentChunk {
 		const trimmedContent = content.trim();
 		if (trimmedContent.length < this.settings.minChunkSize) {
-			console.warn('Chunk smaller than minChunkSize:', {
+			console.warn('Chunk smaller than minChunkSize', {
 				size: trimmedContent.length,
 				minSize: this.settings.minChunkSize,
 			});
@@ -254,7 +282,7 @@ export class TextSplitter {
 			}
 			return result;
 		} catch (error) {
-			console.warn('Failed to parse front matter:', error);
+			console.warn('Failed to parse front matter', error);
 			return {};
 		}
 	}

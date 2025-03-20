@@ -12,14 +12,13 @@ import { InitialSyncManager } from './services/InitialSyncManager';
 import { MetadataExtractor } from './services/MetadataExtractor';
 import { StatusManager, PluginStatus } from './services/StatusManager';
 import { SyncDetectionManager } from './services/SyncDetectionManager';
-
 import {
-    MindMatrixSettings,
-    DEFAULT_SETTINGS,
-    isVaultInitialized,
-    generateVaultId,
-    getAllExclusions,
-    SYSTEM_EXCLUSIONS
+	MindMatrixSettings,
+	DEFAULT_SETTINGS,
+	isVaultInitialized,
+	generateVaultId,
+	getAllExclusions,
+	SYSTEM_EXCLUSIONS
 } from './settings/Settings';
 
 export default class MindMatrixPlugin extends Plugin {
@@ -42,7 +41,6 @@ export default class MindMatrixPlugin extends Plugin {
 
 	async onload() {
 		console.log('Loading Mind Matrix Plugin...');
-
 		try {
 			// Initialize status manager first
 			this.statusManager = new StatusManager(this.addStatusBarItem());
@@ -53,22 +51,18 @@ export default class MindMatrixPlugin extends Plugin {
 			// Load settings
 			await this.loadSettings();
 
-			// Initialize core services
+			// Initialize core services and vault if needed
 			await this.initializeCoreServices();
-
-			// Initialize vault if needed
 			await this.initializeVaultIfNeeded();
 
 			// Add settings tab
 			this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
 
 			if (isVaultInitialized(this.settings)) {
-				// Initialize sync detection using new sync file format integration
 				this.statusManager.setStatus(PluginStatus.WAITING_FOR_SYNC, {
 					message: 'Waiting for Obsidian sync to settle...'
 				});
-
-				// Create and start sync detection
+				// Create and start sync detection with improved logging
 				this.syncDetectionManager = new SyncDetectionManager(
 					this,
 					this.statusManager,
@@ -76,7 +70,6 @@ export default class MindMatrixPlugin extends Plugin {
 				);
 				this.syncDetectionManager.startMonitoring();
 			} else {
-				// If vault isn't initialized, proceed normally
 				await this.completeInitialization();
 			}
 		} catch (error) {
@@ -90,19 +83,15 @@ export default class MindMatrixPlugin extends Plugin {
 
 	private async onSyncQuietPeriodReached(): Promise<void> {
 		try {
-			// Stop monitoring as we've reached quiet period
+			// Stop monitoring as we've reached a quiet period
 			this.syncDetectionManager?.stopMonitoring();
-
 			this.statusManager?.setStatus(PluginStatus.CHECKING_FILE, {
 				message: 'Initializing sync manager with updated sync file format...'
 			});
-
-			// Initialize sync manager with new sync file parameters
+			// Initialize sync manager
 			await this.initializeSyncManager();
-
-			// Start sync process using new sync file architecture
+			// Start sync process
 			await this.startSyncProcess();
-
 			// Complete remaining initialization
 			await this.completeInitialization();
 		} catch (error) {
@@ -119,7 +108,6 @@ export default class MindMatrixPlugin extends Plugin {
 			// Register event handlers and commands
 			this.registerEventHandlers();
 			this.addCommands();
-
 			// Update status to ready
 			this.statusManager?.setStatus(PluginStatus.READY, {
 				message: 'Mind Matrix is ready'
@@ -135,35 +123,22 @@ export default class MindMatrixPlugin extends Plugin {
 
 	async onunload() {
 		console.log('Unloading Mind Matrix Plugin...');
-
-		// Stop sync detection
+		// Stop sync detection and clear any intervals/timeouts
 		this.syncDetectionManager?.stopMonitoring();
-
-		if (this.initializationTimeout) {
-			clearTimeout(this.initializationTimeout);
-		}
-		if (this.syncCheckInterval) {
-			clearInterval(this.syncCheckInterval);
-		}
-
+		if (this.initializationTimeout) clearTimeout(this.initializationTimeout);
+		if (this.syncCheckInterval) clearInterval(this.syncCheckInterval);
 		this.queueService?.stop();
 		this.notificationManager?.clear();
 		this.initialSyncManager?.stop();
 	}
 
 	private async startSyncProcess(): Promise<void> {
-		if (!this.syncManager) {
-			throw new Error('Sync manager not initialized');
-		}
-
+		if (!this.syncManager) throw new Error('Sync manager not initialized');
 		try {
 			this.statusManager?.setStatus(PluginStatus.CHECKING_FILE, {
 				message: 'Checking sync file status with new structure...'
 			});
-
-			// Validate sync file state using new architecture
 			const syncStatus = await this.syncManager.validateSyncState();
-
 			if (!syncStatus.isValid) {
 				if (this.settings.sync.requireSync) {
 					this.statusManager?.setStatus(PluginStatus.ERROR, {
@@ -175,22 +150,18 @@ export default class MindMatrixPlugin extends Plugin {
 					new Notice(`Sync warning: ${syncStatus.error}`);
 				}
 			}
-
 			this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
 				message: 'Initializing services...'
 			});
 			await this.initializeServices();
-
-			// Start periodic sync checks using updated parameters
+			// Start periodic sync checks
 			this.startPeriodicSyncChecks();
-
 			if (this.settings.initialSync.enableAutoInitialSync && this.initialSyncManager) {
 				this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
 					message: 'Starting initial vault sync...'
 				});
 				await this.initialSyncManager.startSync();
 			}
-
 			this.statusManager?.setStatus(PluginStatus.READY, {
 				message: 'Sync process completed'
 			});
@@ -210,121 +181,64 @@ export default class MindMatrixPlugin extends Plugin {
 	}
 
 	private async initializeSyncManager(): Promise<void> {
-		if (!this.errorHandler) {
-			throw new Error('Error handler must be initialized before sync manager');
-		}
-
-		// Ensure that a vault ID is defined before creating the sync manager.
+		if (!this.errorHandler) throw new Error('Error handler must be initialized before sync manager');
 		if (!this.settings.vaultId) {
 			this.settings.vaultId = generateVaultId();
 			await this.saveSettings();
 		}
-
 		try {
-			// Pass vaultId, deviceId, deviceName, and plugin version to the new SyncFileManager
 			this.syncManager = new SyncFileManager(
 				this.app.vault,
 				this.errorHandler,
 				this.settings.sync.syncFilePath,
 				this.settings.sync.backupInterval,
-				this.settings.vaultId, // Now guaranteed to be defined
+				this.settings.vaultId,
 				this.settings.sync.deviceId,
 				this.settings.sync.deviceName,
 				this.manifest.version
 			);
-
 			await this.syncManager.initialize();
 			console.log('Sync manager initialized successfully with new sync file format');
 		} catch (error) {
 			console.error('Failed to initialize sync manager:', error);
-			if (this.settings.enableNotifications) {
-				new Notice('Failed to initialize sync system. Some features may be unavailable.');
-			}
+			if (this.settings.enableNotifications) new Notice('Failed to initialize sync system. Some features may be unavailable.');
 			throw error;
 		}
 	}
 
 	private async initializeCoreServices(): Promise<void> {
-		this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
-			message: 'Initializing core services...'
-		});
-
+		this.statusManager?.setStatus(PluginStatus.INITIALIZING, { message: 'Initializing core services...' });
 		// Initialize error handler
-		this.errorHandler = new ErrorHandler(
-			this.settings?.debug ?? DEFAULT_SETTINGS.debug,
-			this.app.vault.adapter.getBasePath()
-		);
-
+		this.errorHandler = new ErrorHandler(this.settings?.debug ?? DEFAULT_SETTINGS.debug, this.app.vault.adapter.getBasePath());
 		// Initialize notification manager
-		this.notificationManager = new NotificationManager(
-			this.addStatusBarItem(),
-			this.settings?.enableNotifications ?? true,
-			this.settings?.enableProgressBar ?? true
-		);
-
-		this.statusManager?.setStatus(PluginStatus.INITIALIZING, {
-			message: 'Core services initialized'
-		});
+		this.notificationManager = new NotificationManager(this.addStatusBarItem(), this.settings?.enableNotifications ?? true, this.settings?.enableProgressBar ?? true);
+		this.statusManager?.setStatus(PluginStatus.INITIALIZING, { message: 'Core services initialized' });
 	}
 
 	private async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-
 		// Ensure exclusions have the expected structure
-		if (!this.settings.exclusions) {
-			this.settings.exclusions = { ...DEFAULT_SETTINGS.exclusions };
-		}
-
-		// Make sure all properties exist and are arrays
-		if (!this.settings.exclusions.excludedFolders) {
-			this.settings.exclusions.excludedFolders = [];
-		}
-		if (!this.settings.exclusions.excludedFileTypes) {
-			this.settings.exclusions.excludedFileTypes = [];
-		}
-		if (!this.settings.exclusions.excludedFilePrefixes) {
-			this.settings.exclusions.excludedFilePrefixes = [];
-		}
-		if (!this.settings.exclusions.excludedFiles) {
-			this.settings.exclusions.excludedFiles = [];
-		}
-
-		// Ensure system exclusions exist
-		if (!this.settings.exclusions.systemExcludedFolders) {
-			this.settings.exclusions.systemExcludedFolders = [...SYSTEM_EXCLUSIONS.folders];
-		}
-		if (!this.settings.exclusions.systemExcludedFileTypes) {
-			this.settings.exclusions.systemExcludedFileTypes = [...SYSTEM_EXCLUSIONS.fileTypes];
-		}
-		if (!this.settings.exclusions.systemExcludedFilePrefixes) {
-			this.settings.exclusions.systemExcludedFilePrefixes = [...SYSTEM_EXCLUSIONS.filePrefixes];
-		}
-		if (!this.settings.exclusions.systemExcludedFiles) {
-			this.settings.exclusions.systemExcludedFiles = [...SYSTEM_EXCLUSIONS.files];
-		}
+		if (!this.settings.exclusions) this.settings.exclusions = { ...DEFAULT_SETTINGS.exclusions };
+		if (!this.settings.exclusions.excludedFolders) this.settings.exclusions.excludedFolders = [];
+		if (!this.settings.exclusions.excludedFileTypes) this.settings.exclusions.excludedFileTypes = [];
+		if (!this.settings.exclusions.excludedFilePrefixes) this.settings.exclusions.excludedFilePrefixes = [];
+		if (!this.settings.exclusions.excludedFiles) this.settings.exclusions.excludedFiles = [];
+		if (!this.settings.exclusions.systemExcludedFolders) this.settings.exclusions.systemExcludedFolders = [...SYSTEM_EXCLUSIONS.folders];
+		if (!this.settings.exclusions.systemExcludedFileTypes) this.settings.exclusions.systemExcludedFileTypes = [...SYSTEM_EXCLUSIONS.fileTypes];
+		if (!this.settings.exclusions.systemExcludedFilePrefixes) this.settings.exclusions.systemExcludedFilePrefixes = [...SYSTEM_EXCLUSIONS.filePrefixes];
+		if (!this.settings.exclusions.systemExcludedFiles) this.settings.exclusions.systemExcludedFiles = [...SYSTEM_EXCLUSIONS.files];
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-
-		// Update service settings
-		this.notificationManager?.updateSettings(
-			this.settings.enableNotifications,
-			this.settings.enableProgressBar
-		);
+		// Update service settings after saving
+		this.notificationManager?.updateSettings(this.settings.enableNotifications, this.settings.enableProgressBar);
 		this.errorHandler?.updateSettings(this.settings.debug);
-
-		// Reinitialize services if settings have changed
-		if (isVaultInitialized(this.settings)) {
-			await this.initializeServices();
-		}
+		if (isVaultInitialized(this.settings)) await this.initializeServices();
 	}
 
 	private startPeriodicSyncChecks(): void {
-		if (this.syncCheckInterval) {
-			clearInterval(this.syncCheckInterval);
-		}
-
+		if (this.syncCheckInterval) clearInterval(this.syncCheckInterval);
 		this.syncCheckInterval = setInterval(async () => {
 			await this.performSyncCheck();
 		}, this.settings.sync.checkInterval);
@@ -332,68 +246,41 @@ export default class MindMatrixPlugin extends Plugin {
 
 	private async performSyncCheck(): Promise<void> {
 		if (!this.syncManager) return;
-
 		try {
 			const syncStatus = await this.syncManager.validateSyncState();
-
 			if (!syncStatus.isValid) {
 				console.warn(`Sync check failed: ${syncStatus.error}`);
-
-				if (this.settings.enableNotifications) {
-					new Notice(`Sync issue detected: ${syncStatus.error}`);
-				}
-
-				// Attempt recovery
+				if (this.settings.enableNotifications) new Notice(`Sync issue detected: ${syncStatus.error}`);
 				const recovered = await this.syncManager.attemptRecovery();
-				if (!recovered && this.settings.sync.requireSync) {
-					await this.restartServices();
-				}
+				if (!recovered && this.settings.sync.requireSync) await this.restartServices();
 			}
-
-			// Update last sync timestamp
 			await this.syncManager.updateLastSync();
 		} catch (error) {
-			this.errorHandler?.handleError(error, {
-				context: 'performSyncCheck',
-				metadata: { timestamp: Date.now() }
-			});
+			this.errorHandler?.handleError(error, { context: 'performSyncCheck', metadata: { timestamp: Date.now() } });
 		}
 	}
 
 	private async restartServices(): Promise<void> {
-		// Stop existing services
 		this.queueService?.stop();
-
-		// Clear intervals
-		if (this.syncCheckInterval) {
-			clearInterval(this.syncCheckInterval);
-		}
-
+		if (this.syncCheckInterval) clearInterval(this.syncCheckInterval);
 		try {
-			// Reinitialize everything
 			await this.initializeSyncManager();
 			await this.startSyncProcess();
 		} catch (error) {
 			console.error('Failed to restart services:', error);
-			if (this.settings.enableNotifications) {
-				new Notice('Failed to restart services after sync error');
-			}
+			if (this.settings.enableNotifications) new Notice('Failed to restart services after sync error');
 		}
 	}
 
 	private async initializeVaultIfNeeded() {
 		if (this.isInitializing) return;
 		this.isInitializing = true;
-
 		try {
 			if (!isVaultInitialized(this.settings)) {
 				this.settings.vaultId = generateVaultId();
 				this.settings.lastKnownVaultName = this.app.vault.getName();
 				await this.saveSettings();
-
-				if (this.settings.enableNotifications) {
-					new Notice('Vault initialized with new ID');
-				}
+				if (this.settings.enableNotifications) new Notice('Vault initialized with new ID');
 			} else if (this.settings.lastKnownVaultName !== this.app.vault.getName()) {
 				this.settings.lastKnownVaultName = this.app.vault.getName();
 				await this.saveSettings();
@@ -404,17 +291,10 @@ export default class MindMatrixPlugin extends Plugin {
 	}
 
 	private async initializeServices() {
-		console.log('Initializing services...', {
-			hasVault: !!this.app.vault,
-			hasErrorHandler: !!this.errorHandler
-		});
-
-		if (!this.errorHandler) {
-			throw new Error('Core services not initialized');
-		}
-
+		console.log('Initializing services...', { hasVault: !!this.app.vault, hasErrorHandler: !!this.errorHandler });
+		if (!this.errorHandler) throw new Error('Core services not initialized');
 		try {
-			// Initialize FileTracker
+			// Initialize FileTracker with refined change detection and debouncing.
 			this.fileTracker = new FileTracker(this.app.vault, this.errorHandler, this.settings.sync.syncFilePath);
 			await this.fileTracker.initialize();
 			console.log('FileTracker initialized.');
@@ -438,11 +318,9 @@ export default class MindMatrixPlugin extends Plugin {
 			this.openAIService = new OpenAIService(this.settings.openai, this.errorHandler);
 			console.log('OpenAI service initialized.');
 
-			if (!this.app.vault) {
-				throw new Error('Vault is not available');
-			}
+			if (!this.app.vault) throw new Error('Vault is not available');
 
-			// Initialize queue service
+			// Initialize queue service with improved collision handling and progress reporting.
 			if (this.notificationManager && this.supabaseService && this.openAIService) {
 				try {
 					this.queueService = new QueueService(
@@ -455,8 +333,6 @@ export default class MindMatrixPlugin extends Plugin {
 						this.app.vault,
 						this.settings.chunking
 					);
-
-					// Start the queue service
 					this.queueService.start();
 					console.log('Queue service initialized and started.');
 				} catch (error) {
@@ -471,15 +347,13 @@ export default class MindMatrixPlugin extends Plugin {
 			this.metadataExtractor = new MetadataExtractor();
 			console.log('MetadataExtractor initialized.');
 
-			// Initialize InitialSyncManager with proper parameters
+			// Initialize InitialSyncManager
 			if (this.queueService && this.syncManager && this.metadataExtractor) {
-				// Pass the combined exclusion settings to InitialSyncManager
 				const initialSyncOptions = {
 					...this.settings.initialSync,
 					syncFilePath: this.settings.sync.syncFilePath,
 					exclusions: getAllExclusions(this.settings)
 				};
-
 				this.initialSyncManager = new InitialSyncManager(
 					this.app.vault,
 					this.queueService,
@@ -502,24 +376,23 @@ export default class MindMatrixPlugin extends Plugin {
 		if (!this.settings.openai.apiKey) {
 			new Notice('OpenAI API key is missing. AI features are disabled. Configure it in the settings.');
 		}
-
 		if (!this.settings.supabase.url || !this.settings.supabase.apiKey) {
 			new Notice('Supabase configuration is incomplete. Database features are disabled. Configure it in the settings.');
 		}
 	}
 
 	private registerEventHandlers() {
+		// Enhanced file event handlers with improved debouncing and logging
+
 		this.registerEvent(
 			this.app.vault.on('create', async (file) => {
 				if (!(file instanceof TFile)) return;
-
-				if (!await this.ensureSyncFileExists()) {
+				if (!(await this.ensureSyncFileExists())) {
 					new Notice('Failed to create sync file. Plugin functionality limited.');
 					return;
 				}
-
 				if (!this.shouldProcessFile(file)) return;
-
+				console.log(`File created: ${file.path}`);
 				await this.fileTracker?.handleCreate(file);
 				await this.queueFileProcessing(file, 'CREATE');
 			})
@@ -528,14 +401,13 @@ export default class MindMatrixPlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('modify', async (file) => {
 				if (!(file instanceof TFile)) return;
-
-				if (!await this.ensureSyncFileExists()) {
+				if (!(await this.ensureSyncFileExists())) {
 					new Notice('Failed to create sync file. Plugin functionality limited.');
 					return;
 				}
-
 				if (!this.shouldProcessFile(file)) return;
-
+				console.log(`File modified: ${file.path}`);
+				// Enhanced debouncing is handled in FileTracker.handleModify
 				await this.fileTracker?.handleModify(file);
 				await this.queueFileProcessing(file, 'UPDATE');
 			})
@@ -544,19 +416,16 @@ export default class MindMatrixPlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('delete', async (file) => {
 				if (!(file instanceof TFile)) return;
-
 				if (file.path === this.settings.sync.syncFilePath) {
 					console.log('Sync file was deleted, will recreate on next operation');
 					return;
 				}
-
-				if (!await this.ensureSyncFileExists()) {
+				if (!(await this.ensureSyncFileExists())) {
 					new Notice('Failed to create sync file. Plugin functionality limited.');
 					return;
 				}
-
 				if (!this.shouldProcessFile(file)) return;
-
+				console.log(`File deleted: ${file.path}`);
 				await this.fileTracker?.handleDelete(file);
 				await this.queueFileProcessing(file, 'DELETE');
 			})
@@ -565,14 +434,12 @@ export default class MindMatrixPlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('rename', async (file, oldPath) => {
 				if (!(file instanceof TFile)) return;
-
-				if (!await this.ensureSyncFileExists()) {
+				if (!(await this.ensureSyncFileExists())) {
 					new Notice('Failed to create sync file. Plugin functionality limited.');
 					return;
 				}
-
 				if (!this.shouldProcessFile(file)) return;
-
+				console.log(`File renamed from ${oldPath} to ${file.path}`);
 				await this.fileTracker?.handleRename(file, oldPath);
 				await this.handleFileRename(file, oldPath);
 			})
@@ -580,35 +447,21 @@ export default class MindMatrixPlugin extends Plugin {
 	}
 
 	private shouldProcessFile(file: TFile): boolean {
-		if (!this.queueService || !isVaultInitialized(this.settings)) {
-			return false;
-		}
+		if (!this.queueService || !isVaultInitialized(this.settings)) return false;
+		if (!this.settings.enableAutoSync) return false;
 
-		if (!this.settings.enableAutoSync) {
-			return false;
-		}
-
-		// Get combined exclusions (system + user)
 		const allExclusions = getAllExclusions(this.settings);
-
 		const filePath = file.path;
 		const fileName = file.name;
 
-		// Check if this is the sync file directly
-		if (filePath === this.settings.sync.syncFilePath ||
-			filePath === this.settings.sync.syncFilePath + '.backup') {
-			console.log(`Explicitly skipping sync file: ${filePath}`);
+		if (filePath === this.settings.sync.syncFilePath || filePath === this.settings.sync.syncFilePath + '.backup') {
+			console.log(`Skipping sync file: ${filePath}`);
 			return false;
 		}
-
-		// Check excluded files
-		if (Array.isArray(allExclusions.excludedFiles) &&
-			allExclusions.excludedFiles.includes(fileName)) {
+		if (Array.isArray(allExclusions.excludedFiles) && allExclusions.excludedFiles.includes(fileName)) {
 			console.log('Skipping excluded file:', fileName);
 			return false;
 		}
-
-		// Check excluded folders
 		if (Array.isArray(allExclusions.excludedFolders)) {
 			const isExcludedFolder = allExclusions.excludedFolders.some(folder => {
 				const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
@@ -619,29 +472,20 @@ export default class MindMatrixPlugin extends Plugin {
 				return false;
 			}
 		}
-
-		// Check excluded file types
 		if (Array.isArray(allExclusions.excludedFileTypes)) {
-			const isExcludedType = allExclusions.excludedFileTypes.some(
-				ext => filePath.toLowerCase().endsWith(ext.toLowerCase())
-			);
+			const isExcludedType = allExclusions.excludedFileTypes.some(ext => filePath.toLowerCase().endsWith(ext.toLowerCase()));
 			if (isExcludedType) {
 				console.log('Skipping excluded file type:', filePath);
 				return false;
 			}
 		}
-
-		// Check excluded file prefixes
 		if (Array.isArray(allExclusions.excludedFilePrefixes)) {
-			const isExcludedPrefix = allExclusions.excludedFilePrefixes.some(
-				prefix => fileName.startsWith(prefix)
-			);
+			const isExcludedPrefix = allExclusions.excludedFilePrefixes.some(prefix => fileName.startsWith(prefix));
 			if (isExcludedPrefix) {
 				console.log('Skipping file with excluded prefix:', fileName);
 				return false;
 			}
 		}
-
 		return true;
 	}
 
@@ -650,7 +494,6 @@ export default class MindMatrixPlugin extends Plugin {
 			console.error('Sync manager not initialized');
 			return false;
 		}
-
 		try {
 			const syncFile = this.app.vault.getAbstractFileByPath(this.settings.sync.syncFilePath);
 			if (!syncFile) {
@@ -666,25 +509,15 @@ export default class MindMatrixPlugin extends Plugin {
 		}
 	}
 
-	private async queueFileProcessing(file: TFile, type: 'CREATE' | 'UPDATE' | 'DELETE') {
+	private async queueFileProcessing(file: TFile, type: 'CREATE' | 'UPDATE' | 'DELETE'): Promise<void> {
 		try {
 			if (!this.queueService || !this.fileTracker) {
-				console.error('Required services not initialized:', {
-					queueService: !!this.queueService,
-					fileTracker: !!this.fileTracker
-				});
+				console.error('Required services not initialized:', { queueService: !!this.queueService, fileTracker: !!this.fileTracker });
 				return;
 			}
-
-			console.log('Starting file processing:', {
-				fileName: file.name,
-				type: type,
-				path: file.path
-			});
-
+			console.log('Queueing file processing:', { fileName: file.name, type, path: file.path });
 			const metadata = await this.fileTracker.createFileMetadata(file);
 			console.log('Created metadata:', metadata);
-
 			const task = {
 				id: file.path,
 				type: type,
@@ -697,22 +530,16 @@ export default class MindMatrixPlugin extends Plugin {
 				metadata,
 				data: {}
 			};
-
 			console.log('Created task:', task);
 			await this.queueService.addTask(task);
 			console.log('Task added to queue');
-
 			if (this.settings.enableNotifications) {
 				const action = type.toLowerCase();
 				new Notice(`Queued ${action} for processing: ${file.name}`);
 			}
 		} catch (error) {
 			console.error('Error in queueFileProcessing:', error);
-			this.errorHandler?.handleError(error, {
-				context: 'queueFileProcessing',
-				metadata: { filePath: file.path, type }
-			});
-
+			this.errorHandler?.handleError(error, { context: 'queueFileProcessing', metadata: { filePath: file.path, type } });
 			if (this.settings.enableNotifications) {
 				new Notice(`Failed to queue ${file.name} for processing`);
 			}
@@ -722,7 +549,10 @@ export default class MindMatrixPlugin extends Plugin {
 	private async handleFileRename(file: TFile, oldPath: string) {
 		try {
 			if (!this.supabaseService) return;
+			// First update the file status record to use the new path.
+			await this.supabaseService.updateFilePath(oldPath, file.path);
 
+			// Then, if there are document chunks for the old path, update them as well.
 			const chunks = await this.supabaseService.getDocumentChunks(oldPath);
 			if (chunks.length > 0) {
 				const updatedChunks = chunks.map(chunk => ({
@@ -733,20 +563,14 @@ export default class MindMatrixPlugin extends Plugin {
 						path: file.path
 					}
 				}));
-
 				await this.supabaseService.deleteDocumentChunks(oldPath);
 				await this.supabaseService.upsertChunks(updatedChunks);
-
-				if (this.settings.enableNotifications) {
-					new Notice(`Updated database entries for renamed file: ${file.name}`);
-				}
+			}
+			if (this.settings.enableNotifications) {
+				new Notice(`Updated database entries for renamed file: ${file.name}`);
 			}
 		} catch (error) {
-			this.errorHandler?.handleError(error, {
-				context: 'handleFileRename',
-				metadata: { filePath: file.path, oldPath }
-			});
-
+			this.errorHandler?.handleError(error, { context: 'handleFileRename', metadata: { filePath: file.path, oldPath } });
 			if (this.settings.enableNotifications) {
 				new Notice(`Failed to update database for renamed file: ${file.name}`);
 			}

@@ -107,6 +107,15 @@ export interface PriorityRule {
 }
 
 /**
+ * New update behavior settings for file processing
+ */
+export interface UpdateBehaviorSettings {
+    debounceTime: number;              // Debounce delay in milliseconds for update operations
+    processingMode: 'instant' | 'delayed';  // Whether updates are processed instantly or after a delay
+    priorityOverride: number;          // Default processing priority override for update tasks
+}
+
+/**
  * Main settings interface for the plugin
  */
 export interface MindMatrixSettings {
@@ -131,6 +140,8 @@ export interface MindMatrixSettings {
 	sync: SyncSettings;
 	// Initial sync settings
 	initialSync: InitialSyncSettings;
+	// New update behavior settings
+	updateBehavior: UpdateBehaviorSettings;
 }
 
 /**
@@ -140,6 +151,15 @@ export const DEFAULT_CHUNKING_OPTIONS: ChunkSettings = {
 	chunkSize: 1000,       // Default size of each chunk in characters
 	chunkOverlap: 200,     // Default overlap between chunks
 	minChunkSize: 100,     // Minimum chunk size to ensure usability
+};
+
+/**
+ * Default update behavior settings
+ */
+export const DEFAULT_UPDATE_BEHAVIOR: UpdateBehaviorSettings = {
+    debounceTime: 1000,             // 1 second debounce delay by default
+    processingMode: 'instant',      // Process updates instantly by default
+    priorityOverride: 1             // Default priority level for update operations
 };
 
 /**
@@ -189,7 +209,6 @@ export const SYSTEM_EXCLUSIONS = {
 export const DEFAULT_SETTINGS: MindMatrixSettings = {
 	vaultId: null,
 	lastKnownVaultName: '',
-
 	supabase: {
 		url: '',
 		apiKey: '',
@@ -197,45 +216,36 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 		lastSetupAttempt: 0,
 		setupRetries: 0,
 	},
-
 	openai: {
 		apiKey: '',
 		model: 'text-embedding-ada-002',
 		maxTokens: 8000,
 		temperature: 0.0,
 	},
-
-	chunking: { ...DEFAULT_CHUNKING_OPTIONS }, // Use default chunking options
-
+	chunking: { ...DEFAULT_CHUNKING_OPTIONS },
 	queue: {
 		maxConcurrent: 3,
 		retryAttempts: 3,
 		retryDelay: 1000,
 	},
-
 	exclusions: {
-		// User-facing exclusions (initially empty)
 		excludedFolders: [],
 		excludedFileTypes: [],
 		excludedFilePrefixes: [],
 		excludedFiles: [],
-		// System exclusions (hidden from UI)
 		systemExcludedFolders: [...SYSTEM_EXCLUSIONS.folders],
 		systemExcludedFileTypes: [...SYSTEM_EXCLUSIONS.fileTypes],
 		systemExcludedFilePrefixes: [...SYSTEM_EXCLUSIONS.filePrefixes],
 		systemExcludedFiles: [...SYSTEM_EXCLUSIONS.files]
 	},
-
 	debug: {
 		enableDebugLogs: false,
 		logLevel: 'info',
 		logToFile: false,
 	},
-
 	enableAutoSync: true,
 	enableNotifications: true,
 	enableProgressBar: true,
-
 	sync: {
 		syncFilePath: '_mindmatrixsync.md',
 		backupInterval: 3600000,  // 1 hour in milliseconds
@@ -243,7 +253,6 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 		checkAttempts: 3,
 		timeout: 40000,
 		requireSync: true,
-		// New cross-device settings
 		deviceId: generateDeviceId(),
 		deviceName: `Device-${Math.floor(Math.random() * 1000)}`,
 		knownDevices: [],
@@ -251,7 +260,6 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 		offlineQueueEnabled: true,
 		conflictResolutionStrategy: 'newest-wins'
 	},
-
 	initialSync: {
 		batchSize: 50,
 		maxConcurrentBatches: 3,
@@ -261,6 +269,9 @@ export const DEFAULT_SETTINGS: MindMatrixSettings = {
 			{ pattern: 'projects/', priority: 2 },
 			{ pattern: 'archive/', priority: 1 }
 		]
+	},
+	updateBehavior: {
+		...DEFAULT_UPDATE_BEHAVIOR
 	}
 };
 
