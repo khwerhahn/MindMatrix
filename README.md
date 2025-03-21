@@ -160,7 +160,7 @@ yarn build
 
 ## API Documentation
 
-For further details on the plugin's API and development guidelines, please see the [Obsidian Plugin API documentation](https://github.com/obsidianmd/obsidian-api) as well as our internal [API.md](./docs/API.md) file.
+For further details on the plugin's API and development guidelines, please see the [Obsidian Plugin API documentation](https://github.com/obsidianmd/obsidian-api).
 
 ---
 
