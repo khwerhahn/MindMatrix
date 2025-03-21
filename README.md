@@ -37,18 +37,39 @@ This includes:
 - Setting up Supabase with the required SQL
 - Configuring OpenAI API credentials
 - Plugin installation steps
-- Detailed configuration options
+- Detailed configuration operations
+- n8n workflow setup for Telegram Chatbot (optional and customizable)
 
 ---
 
-## Usage
+## Project Status and TODOs
 
-1. Install the plugin and open the settings tab to configure your Supabase and OpenAI API credentials.
-2. Configure any exclusion patterns for files or directories that should not be synced.
-3. Run the initial sync using the ribbon icon or via the command palette.
-4. The plugin will automatically keep your vector database in sync as you add, modify, or delete notes.
+Mind Matrix is under active development. The following tasks are planned for upcoming releases. Feel free to contribute or suggest additional features.
 
-For integrating with n8n or building other applications with your synchronized data, see the [INTEGRATIONS.md](./INTEGRATIONS.md) guide.
+### High Priority
+- **Thorough Testing:** Implement comprehensive tests for large vaults and concurrent operations
+- **Live Cycle Testing:** Create automated tests that verify file creation, modification, and deletion are properly reflected in the database
+- **UI Refinement:** Clean up and improve the settings UI for better user experience
+- **Documentation Updates:** Align documentation with the current state of the plugin
+
+### Medium Priority
+- **Performance Optimization:** Improve handling of large vaults with many files
+- **Integration Guide:** Create dedicated documentation for n8n integration and Telegram bot setup
+- **Setup Guide Improvements:** Add clearer step-by-step instructions with screenshots
+- **Public Repository Setup:** Prepare GitHub repo for public collaboration and pull requests
+
+### Technical Debt
+- **Code Refactoring:** Further modularize components for better maintainability
+- **Error Handling:** Enhance error reporting and recovery mechanisms
+- **Logging System:** Improve the logging system for better debugging
+- **Unit Test Coverage:** Increase test coverage across core components
+
+### Future Features
+- **In-App Semantic Search:** Add a native search interface within Obsidian
+- **Alternative Embedding Providers:** Support for other embedding services beyond OpenAI
+- **Enhanced Metadata Extraction:** Improve handling of tags, links, and other metadata
+- **Visualization Tools:** Add tools to visualize connections between notes
+- **Multi-Model Support:** Allow using different embedding models for different types of content
 
 ---
 
@@ -73,9 +94,9 @@ For integrating with n8n or building other applications with your synchronized d
 ### Development Prerequisites
 
 - Node.js v16 or higher
-- Yarn package manager
+- Yarn
 - A Supabase (PostgreSQL) database with the vector extension enabled
-- Familiarity with TypeScript and the Obsidian Plugin API
+- Familiarity with the Obsidian Plugin API
 
 ### Project Structure
 
