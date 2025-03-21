@@ -4,7 +4,7 @@
 
 Mind Matrix is an Obsidian plugin that seamlessly synchronizes your notes with a Supabase vector database. By leveraging AI-powered embeddings and semantic search capabilities, it enables powerful knowledge retrieval and automation. Use it to build custom integrations, automate workflows with tools like n8n, and transform your personal knowledge base into a searchable, dynamic resource.
 
-**Developer**: [Konstantin](https://khw.io) | [@khwhahn](https://x.com/khwhahn)
+I've built this to make my Obsidian vault searchable through AI tools. For example, I have a Telegram Bot set up that I can ask questions on-the-go, and it searches my vectorized vault data to provide answers. The n8n workflow integrates with Perplexity to augment my personal knowledge with external information when needed, creating a powerful knowledge assistant that travels with me.
 
 ---
 
@@ -33,6 +33,12 @@ Mind Matrix creates and maintains vector representations of your notes in a Supa
 
 For detailed installation and setup instructions, please refer to the [INSTALL.md](./INSTALL.md) file.
 
+This includes:
+- Setting up Supabase with the required SQL
+- Configuring OpenAI API credentials
+- Plugin installation steps
+- Detailed configuration options
+
 ---
 
 ## Usage
@@ -41,6 +47,8 @@ For detailed installation and setup instructions, please refer to the [INSTALL.m
 2. Configure any exclusion patterns for files or directories that should not be synced.
 3. Run the initial sync using the ribbon icon or via the command palette.
 4. The plugin will automatically keep your vector database in sync as you add, modify, or delete notes.
+
+For integrating with n8n or building other applications with your synchronized data, see the [INTEGRATIONS.md](./INTEGRATIONS.md) guide.
 
 ---
 

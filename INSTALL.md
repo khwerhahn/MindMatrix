@@ -8,6 +8,8 @@ Before installing Mind Matrix, ensure you have:
 2. A Supabase account with an active project.
 3. An OpenAI API key for generating embeddings.
 
+The inspiration for this plugin came from watching Nate Herk's YouTube video [Step by Step: RAG AI Agents Got Even Better](https://youtu.be/wEXrbtqNIqI?t=323). This is great to watch to setup your Telegram Chatbot using n8n to connect to the Supabase database. I made an "Obsidian" workflow which I can plug into other n8n workflows to get information from my Obsidian vault in different scenarios. It has made retrieving knowledge from my vault so much easier and more practical in different use cases.
+
 ---
 
 ## Installation Steps
@@ -41,8 +43,10 @@ Before installing Mind Matrix, ensure you have:
 2. **Set Up the Database Schema:**
    - Open your Supabase project dashboard.
    - Click on **SQL Editor** in the left sidebar.
-   - Create a new query and copy-paste the SQL setup script from `sql/setup.sql` (located in the repository).
+   - Create a new query and copy-paste the SQL setup script from the [sql/setup.sql](sql/setup.sql)` file in the repository.
    - Execute the script to set up the necessary tables and functions.
+
+   > **Note:** The setup script creates tables for document chunks and file status tracking, sets up the vector extension for embeddings, and creates functions for semantic search. For the most up-to-date version, always refer to the `sql/setup.sql` file in the repository.
 
 3. **Obtain API Credentials:**
    - Go to **Project Settings > API**.
@@ -54,8 +58,9 @@ Before installing Mind Matrix, ensure you have:
 ### 3. Get Your OpenAI API Key
 
 1. Visit [OpenAI API Keys](https://platform.openai.com/api-keys).
-2. Create a new API key.
-3. Copy the API key for use in the plugin configuration.
+2. Sign in to your account or create a new one.
+3. Create a new API key.
+4. Copy the API key for use in the plugin configuration.
 
 ---
 
@@ -134,16 +139,3 @@ If you encounter any issues:
    - Replace the files in your plugin directory.
    - Restart Obsidian.
    - Review the changelog for any required database updates or configuration changes.
-
----
-
-## Development
-
-For contributors, the project uses **yarn** as the package manager.
-
-### Getting Started
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/mind-matrix.git
-   cd mind-matrix
