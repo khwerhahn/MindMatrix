@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS public.obsidian_documents (
     metadata JSONB,
     embedding vector(1536),
     last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    vectorized_at TIMESTAMPTZ,
     UNIQUE(vault_id, obsidian_id, chunk_index)
 );
 
