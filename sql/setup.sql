@@ -127,3 +127,33 @@ GRANT EXECUTE ON FUNCTION public.match_documents(vector(1536), TEXT, INT) TO ser
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO service_role;
+
+-------------------------------------------------
+-- Enable Row Level Security (RLS) and create policies
+-------------------------------------------------
+
+-- Enable RLS on obsidian_documents
+ALTER TABLE public.obsidian_documents ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS policies for obsidian_documents
+CREATE POLICY "Users can view their own vault documents"
+    ON public.obsidian_documents
+    FOR SELECT
+    USING (vault_id = current_setting('app.current_vault_id', true));
+
+CREATE POLICY "Service role can do everything"
+    ON public.obsidian_documents
+    USING (auth.role() = 'service_role');
+
+-- Enable RLS on obsidian_file_status
+ALTER TABLE public.obsidian_file_status ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS policies for obsidian_file_status
+CREATE POLICY "Users can view their own vault file status"
+    ON public.obsidian_file_status
+    FOR SELECT
+    USING (vault_id = current_setting('app.current_vault_id', true));
+
+CREATE POLICY "Service role can do everything"
+    ON public.obsidian_file_status
+    USING (auth.role() = 'service_role');

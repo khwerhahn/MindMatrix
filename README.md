@@ -184,3 +184,55 @@ This project is licensed under the MIT License.
 
 - **Website**: [https://khw.io](https://khw.io)
 - **X/Twitter**: [@khwhahn](https://x.com/khwhahn)
+
+## Development
+
+### Documentation
+The project includes comprehensive documentation to help developers understand and contribute to the codebase:
+
+- [ARCHITECTURE.md](ARCHITECTURE.md): Detailed overview of the system architecture, components, and data flow
+- [TASKS.md](TASKS.md): Current sprint progress, upcoming tasks, and project backlog
+- [DEVELOPMENT.md](DEVELOPMENT.md): Setup instructions, development workflow, and contribution guidelines
+
+### Prerequisites
+- Node.js (v16 or later)
+- Yarn package manager
+- PostgreSQL (v14 or later)
+- Supabase account
+- OpenAI API key (for embeddings)
+
+### Setup
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   yarn install
+   ```
+3. Create `.env` file:
+   ```bash
+   cp .env.test .env
+   ```
+4. Update `.env` with your credentials:
+   - Supabase project URL
+   - Supabase database password
+   - OpenAI API key
+5. Initialize the project:
+   ```bash
+   make init
+   ```
+
+### Development Commands
+- `make dev`: Start the development server
+- `make test-db`: Test the database connection
+- `make reset`: Reset and set up the database
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
