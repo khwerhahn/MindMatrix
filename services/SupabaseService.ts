@@ -834,4 +834,99 @@ export class SupabaseService {
 		}
 	}
 
+	/**
+	 * Checks if all required tables exist and are properly set up.
+	 * Returns an object with the status of each table and any missing tables.
+	 */
+	public async checkDatabaseSetup(): Promise<{
+		isComplete: boolean;
+		missingTables: string[];
+		error?: string;
+	}> {
+		if (!this.client) {
+			return {
+				isComplete: false,
+				missingTables: [this.TABLE_NAME, this.FILE_STATUS_TABLE],
+				error: 'Supabase client is not initialized'
+			};
+		}
+
+		const missingTables: string[] = [];
+		let error: string | undefined;
+
+		try {
+			// Check obsidian_documents table
+			const { error: documentsError } = await this.client
+				.from(this.TABLE_NAME)
+				.select('id')
+				.limit(1);
+			if (documentsError && documentsError.message.includes('does not exist')) {
+				missingTables.push(this.TABLE_NAME);
+			}
+
+			// Check obsidian_file_status table
+			const { error: statusError } = await this.client
+				.from(this.FILE_STATUS_TABLE)
+				.select('id')
+				.limit(1);
+			if (statusError && statusError.message.includes('does not exist')) {
+				missingTables.push(this.FILE_STATUS_TABLE);
+			}
+
+			// Check if vector extension is installed
+			const { error: vectorError } = await this.client.rpc('vector_norm', { vector: [1, 0] });
+			if (vectorError && vectorError.message.includes('function vector_norm')) {
+				error = 'Vector extension is not installed';
+			}
+
+			return {
+				isComplete: missingTables.length === 0 && !error,
+				missingTables,
+				error
+			};
+		} catch (err) {
+			console.error('Error checking database setup:', err);
+			return {
+				isComplete: false,
+				missingTables: [this.TABLE_NAME, this.FILE_STATUS_TABLE],
+				error: `Error checking database setup: ${(err as Error).message}`
+			};
+		}
+	}
+
+	/**
+	 * Resets the database by dropping and recreating all tables.
+	 * WARNING: This will delete all data in the tables.
+	 */
+	public async resetDatabase(): Promise<{ success: boolean; message: string }> {
+		if (!this.client) {
+			return {
+				success: false,
+				message: 'Supabase client is not initialized'
+			};
+		}
+
+		try {
+			// Drop tables if they exist
+			await this.client.rpc('drop_tables_if_exist');
+			
+			// Recreate tables
+			const { error: createError } = await this.client.rpc('create_required_tables');
+			if (createError) {
+				throw new Error(`Failed to create tables: ${createError.message}`);
+			}
+
+			return {
+				success: true,
+				message: 'Database reset successfully'
+			};
+		} catch (err) {
+			console.error('Error resetting database:', err);
+			return {
+				success: false,
+				message: `Error resetting database: ${(err as Error).message}`
+			};
+		}
+	}
+
 }

@@ -2,6 +2,7 @@
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import MindMatrixPlugin from '../main';
 import { MindMatrixSettings, generateVaultId, isVaultInitialized, getUserExclusions, SYSTEM_EXCLUSIONS } from './Settings';
+import { SupabaseService } from '../services/SupabaseService';
 
 export class MindMatrixSettingsTab extends PluginSettingTab {
 	plugin: MindMatrixPlugin;
@@ -13,7 +14,7 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 		this.settings = plugin.settings;
 	}
 
-	display(): void {
+	async display(): Promise<void> {
 		const { containerEl } = this;
 		containerEl.empty();
 
@@ -347,6 +348,97 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 						new Notice('Log to file setting updated.');
 					})
 			);
+
+		// Database Management Section
+		containerEl.createEl('h2', { text: 'Database Management' });
+
+		// Database Status
+		const statusContainer = containerEl.createDiv('database-status-container');
+		const statusText = statusContainer.createEl('p', { text: 'Checking database status...' });
+		
+		// Test Connection Button
+		const testButton = containerEl.createEl('button', { text: 'Test Database Connection' });
+		testButton.onClickEvent(async () => {
+			testButton.setAttr('disabled', 'true');
+			statusText.setText('Testing connection...');
+			
+			try {
+				const supabase = await SupabaseService.getInstance(this.plugin.settings);
+				if (!supabase) {
+					statusText.setText('❌ Database connection failed: Invalid credentials');
+					return;
+				}
+
+				const setupStatus = await supabase.checkDatabaseSetup();
+				if (setupStatus.isComplete) {
+					statusText.setText('✅ Database connection successful and all tables are set up correctly');
+				} else {
+					let message = '⚠️ Database setup incomplete:';
+					if (setupStatus.missingTables.length > 0) {
+						message += `\nMissing tables: ${setupStatus.missingTables.join(', ')}`;
+					}
+					if (setupStatus.error) {
+						message += `\nError: ${setupStatus.error}`;
+					}
+					statusText.setText(message);
+				}
+			} catch (error) {
+				statusText.setText(`❌ Database connection failed: ${(error as Error).message}`);
+			} finally {
+				testButton.removeAttribute('disabled');
+			}
+		});
+
+		// Reset Database Button
+		const resetButton = containerEl.createEl('button', { 
+			text: 'Reset Database',
+			cls: 'mod-warning'
+		});
+		resetButton.onClickEvent(async () => {
+			const confirmed = await new Promise<boolean>((resolve) => {
+				const notice = new Notice('This will delete all data in the database. Are you sure?');
+				notice.setMessage('This will delete all data in the database. Are you sure?', [
+					{
+						text: 'Yes',
+						callback: () => {
+							notice.hide();
+							resolve(true);
+						}
+					},
+					{
+						text: 'No',
+						callback: () => {
+							notice.hide();
+							resolve(false);
+						}
+					}
+				]);
+			});
+
+			if (!confirmed) return;
+
+			resetButton.setAttr('disabled', 'true');
+			statusText.setText('Resetting database...');
+
+			try {
+				const supabase = await SupabaseService.getInstance(this.plugin.settings);
+				if (!supabase) {
+					statusText.setText('❌ Database reset failed: Invalid credentials');
+					return;
+				}
+
+				const result = await supabase.resetDatabase();
+				if (result.success) {
+					statusText.setText('✅ Database reset successfully');
+				} else {
+					statusText.setText(`❌ Database reset failed: ${result.message}`);
+				}
+			} catch (error) {
+				statusText.setText(`❌ Database reset failed: ${(error as Error).message}`);
+			} finally {
+				resetButton.removeAttribute('disabled');
+			}
+		});
 	}
 
 	private async showResetConfirmation(): Promise<boolean> {
