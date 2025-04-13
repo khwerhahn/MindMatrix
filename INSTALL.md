@@ -1,141 +1,166 @@
 # Installation Guide
 
-## Prerequisites
+## For Normal Users
 
-Before installing Mind Matrix, ensure you have:
+### Prerequisites
 
-1. The latest version of Obsidian installed.
-2. A Supabase account with an active project.
-3. An OpenAI API key for generating embeddings.
+Before you begin, ensure you have:
+- [Obsidian](https://obsidian.md/) installed
+- A [Supabase](https://supabase.com) account
+- An [OpenAI](https://platform.openai.com/) API key
+
+### Installation Steps
+
+1. **Install the Plugin**
+
+   #### Method 1: Through Obsidian (Recommended)
+   - Open Obsidian Settings
+   - Go to Community Plugins
+   - Search for "Mind Matrix"
+   - Click Install and Enable
+
+   #### Method 2: Manual Installation
+   - Download the latest release from [GitHub Releases](https://github.com/yourusername/mindmatrix/releases)
+   - Extract the files to your vault's plugins directory:
+     ```
+     .obsidian/plugins/mind-matrix/
+     ```
+   - Restart Obsidian
+   - Enable the plugin in Community Plugins settings
+
+2. **Set Up Supabase**
+   - Create a new Supabase project at [supabase.com](https://supabase.com)
+   - Go to Project Settings > Database
+   - Copy your database password
+   - Go to Project Settings > API
+   - Copy your Project URL
+
+3. **Configure the Plugin**
+   - Open Mind Matrix settings in Obsidian
+   - Enter your Supabase credentials:
+     - Project URL
+     - Database Password
+   - Enter your OpenAI API key
+   - Click "Initialize Database" to create the required tables
+
+4. **Start Using**
+   - The plugin will automatically sync your notes
+   - Use the command palette to search your knowledge base
+   - Configure exclusion patterns if needed
+
+## For Developers
+
+### Prerequisites
+
+Before you begin, ensure you have the following installed:
+- [Node.js](https://nodejs.org/) (v16 or higher)
+- [Yarn](https://yarnpkg.com/) package manager
+- [PostgreSQL](https://www.postgresql.org/) (v14 or higher)
+- [jq](https://stedolan.github.io/jq/) (for password encoding)
+- [coreutils](https://www.gnu.org/software/coreutils/) (for timeout command)
 
 The inspiration for this plugin came from watching Nate Herk's YouTube video [Step by Step: RAG AI Agents Got Even Better](https://youtu.be/wEXrbtqNIqI?t=323). This is great to watch to setup your Telegram Chatbot using n8n to connect to the Supabase database. I made an "Obsidian" workflow which I can plug into other n8n workflows to get information from my Obsidian vault in different scenarios. It has made retrieving knowledge from my vault so much easier and more practical in different use cases.
 
----
+### Installation Steps
 
-## Installation Steps
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/mindmatrix.git
+   cd mindmatrix
+   ```
 
-### 1. Install the Plugin
+2. **Install dependencies**
+   ```bash
+   yarn install
+   ```
 
-#### From Obsidian Community Plugins
+3. **Set up environment variables**
+   - Copy `.env.test` to `.env`:
+     ```bash
+     cp .env.test .env
+     ```
+   - Update the `.env` file with your Supabase credentials:
+     ```
+     SUPABASE_URL=https://your-project-ref.supabase.co
+     SUPABASE_DB_PASSWORD=your-database-password
+     ```
 
-1. Open Obsidian Settings.
-2. Navigate to **Community Plugins**.
-3. Search for **Mind Matrix**.
-4. Click **Install**, then **Enable**.
+4. **Initialize the project**
+   ```bash
+   make init
+   ```
+   This command will:
+   - Check for required tools
+   - Verify environment variables
+   - Test the database connection
+   - Set up the database schema
 
-#### Manual Installation
+### Available Commands
 
-1. Download the latest release from the GitHub releases page.
-2. Extract the files to your vault's plugins directory:
-   `.obsidian/plugins/mind-matrix/`
-3. Restart Obsidian.
-4. Enable the plugin in the **Community Plugins** settings.
+#### Development
+- `make dev` - Start the development server
+- `make test-db` - Test the database connection
+- `make reset` - Reset and set up the database
 
----
+#### Database Management
+- `make install-postgres` - Install PostgreSQL if not already installed
+- `make test-db` - Test the database connection
+- `make reset` - Reset the database and run setup scripts
 
-### 2. Set Up Supabase
+#### Release Management
+- `make release` - Create a patch release (default)
+- `make release-major` - Create a major release
+- `make release-minor` - Create a minor release
+- `make release-patch` - Create a patch release
 
-1. **Create a New Supabase Project:**
-   - Visit [Supabase](https://supabase.com) and sign in.
-   - Click **New Project**.
-   - Fill in the project details and create your project.
+The release workflow will:
+1. Check for a clean working directory
+2. Verify we're on the main branch
+3. Bump the version number
+4. Generate a changelog
+5. Create and push a git tag
 
-2. **Set Up the Database Schema:**
-   - Open your Supabase project dashboard.
-   - Click on **SQL Editor** in the left sidebar.
-   - Create a new query and copy-paste the SQL setup script from the [sql/setup.sql](sql/setup.sql)` file in the repository.
-   - Execute the script to set up the necessary tables and functions.
+### Troubleshooting
 
-   > **Note:** The setup script creates tables for document chunks and file status tracking, sets up the vector extension for embeddings, and creates functions for semantic search. For the most up-to-date version, always refer to the `sql/setup.sql` file in the repository.
+#### Database Connection Issues
 
-3. **Obtain API Credentials:**
-   - Go to **Project Settings > API**.
-   - Copy the **Project URL** and the `service_role` API key.
-   - Keep these credentials secure; you will need them during plugin configuration.
+If you encounter database connection issues:
 
----
+1. **Check IP Address Restrictions**
+   - Run `make test-db` to see your current IP address
+   - Add this IP to your Supabase project's network restrictions
+   - Wait a few minutes for changes to take effect
 
-### 3. Get Your OpenAI API Key
+2. **Verify Connection Details**
+   - Ensure your `SUPABASE_URL` and `SUPABASE_DB_PASSWORD` are correct
+   - Check if the project reference matches your Supabase dashboard
+   - Verify there are no network restrictions or firewall rules blocking the connection
 
-1. Visit [OpenAI API Keys](https://platform.openai.com/api-keys).
-2. Sign in to your account or create a new one.
-3. Create a new API key.
-4. Copy the API key for use in the plugin configuration.
+3. **Install Required Tools**
+   If you see errors about missing commands:
+   - `psql`: Install PostgreSQL with `make install-postgres`
+   - `jq`: Install with `brew install jq`
+   - `timeout`: Install with `brew install coreutils`
 
----
+#### Release Issues
 
-### 4. Configure the Plugin
+If you encounter issues during release:
 
-1. Open **Obsidian Settings**.
-2. Navigate to the **Mind Matrix** settings tab.
-3. Enter your API credentials:
-   - **Supabase URL** (your Project URL)
-   - **Supabase API Key** (the `service_role` key)
-   - **OpenAI API Key**
-4. Optionally, configure exclusion patterns:
-   - **Excluded Folders** (e.g., `.obsidian`, `node_modules`)
-   - **Excluded File Types** (e.g., `.mp3`, `.jpg`, `.png`)
-   - **Excluded File Prefixes** (e.g., `_`, `.`)
+1. **Working Directory Not Clean**
+   - Commit or stash any changes before running release commands
+   - Use `git status` to check for uncommitted changes
 
----
+2. **Not on Main Branch**
+   - Switch to the main branch with `git checkout main`
+   - Ensure all changes are merged before releasing
 
-### 5. Initial Setup
+3. **Version Bump Issues**
+   - Check `manifest.json` and `package.json` for correct version format
+   - Ensure you have write permissions to these files
 
-1. Initialize your vault within the plugin (this will generate a unique vault identifier).
-2. Enable auto-sync if desired.
-3. Run the **Force sync all files** command from the command palette or via the ribbon icon to perform the initial synchronization.
+### Support
 
----
-
-## Maintenance
-
-### Database Management
-
-Monitor your Supabase database usage:
-
-1. Navigate to **Database > Dashboard** in your Supabase project.
-2. Check storage usage and query performance.
-3. Monitor API usage under **Project Settings > Usage**.
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Database Initialization Failed**
-   - Verify your Supabase API credentials.
-   - Check the browser/console for specific error messages.
-   - Ensure the SQL setup script ran successfully.
-
-2. **OpenAI API Issues**
-   - Confirm your API key is valid.
-   - Check for any usage limits or quota issues.
-   - Ensure your OpenAI account has sufficient credits.
-
-3. **Sync Errors**
-   - Verify your Supabase connection and permissions.
-   - Check your file exclusion settings to ensure necessary files are being synced.
-
-### Getting Help
-
-If you encounter any issues:
-1. Check the [GitHub Issues](https://github.com/yourusername/mind-matrix/issues) page.
-2. Join our Discord community (link available in the repository).
-3. Submit a new issue with:
-   - Your Obsidian version.
-   - Error messages from the console.
-   - Steps to reproduce the issue.
-
----
-
-## Upgrading
-
-1. **Community Plugins:**
-   Updates will be delivered automatically via Obsidian's Community Plugins mechanism.
-
-2. **Manual Installations:**
-   - Download the new version from GitHub.
-   - Replace the files in your plugin directory.
-   - Restart Obsidian.
-   - Review the changelog for any required database updates or configuration changes.
+If you encounter any issues not covered in this guide:
+1. Check the error messages for specific details
+2. Review the troubleshooting steps above
+3. If the issue persists, please open an issue in the repository
