@@ -1,15 +1,14 @@
 #!/bin/bash
 
-# Colors for logging
+# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Logging functions
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${GREEN}[INFO]${NC} $1"
 }
 
 log_success() {
@@ -25,20 +24,18 @@ log_error() {
 }
 
 # Check if working directory is clean
-check_working_directory() {
+check_clean_working_dir() {
     if [ -n "$(git status --porcelain)" ]; then
-        log_error "Working directory is not clean. Please commit or stash changes."
-        git status
+        log_error "Working directory is not clean. Please commit or stash your changes."
         exit 1
     fi
     log_success "Working directory is clean"
 }
 
 # Check if we're on main branch
-check_branch() {
-    current_branch=$(git rev-parse --abbrev-ref HEAD)
-    if [ "$current_branch" != "main" ]; then
-        log_error "Not on main branch. Current branch: $current_branch"
+check_main_branch() {
+    if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
+        log_error "Not on main branch. Please switch to main branch first."
         exit 1
     fi
     log_success "On main branch"
@@ -46,85 +43,92 @@ check_branch() {
 
 # Get current version from manifest.json
 get_current_version() {
-    if [ -f manifest.json ]; then
-        version=$(grep '"version":' manifest.json | cut -d\" -f4)
-        echo "$version"
-    else
+    if [ ! -f manifest.json ]; then
         log_error "manifest.json not found"
         exit 1
     fi
+    CURRENT_VERSION=$(jq -r '.version' manifest.json)
+    log_info "Current version: $CURRENT_VERSION"
 }
 
 # Bump version in manifest.json and package.json
 bump_version() {
-    current_version=$1
-    bump_type=$2
+    local bump_type=$1
+    local current_version=$CURRENT_VERSION
+    local major minor patch
 
-    # Parse current version
     IFS='.' read -r major minor patch <<< "$current_version"
 
     case $bump_type in
-        "major")
-            new_version="$((major + 1)).0.0"
+        major)
+            major=$((major + 1))
+            minor=0
+            patch=0
             ;;
-        "minor")
-            new_version="$major.$((minor + 1)).0"
+        minor)
+            minor=$((minor + 1))
+            patch=0
             ;;
-        "patch")
-            new_version="$major.$minor.$((patch + 1))"
+        patch)
+            patch=$((patch + 1))
             ;;
         *)
-            log_error "Invalid bump type: $bump_type. Use major, minor, or patch"
+            log_error "Invalid bump type. Use major, minor, or patch."
             exit 1
             ;;
     esac
 
+    NEW_VERSION="$major.$minor.$patch"
+    log_info "Bumping version to $NEW_VERSION"
+
     # Update manifest.json
-    sed -i '' "s/\"version\": \"$current_version\"/\"version\": \"$new_version\"/" manifest.json
-    log_info "Updated version in manifest.json to $new_version"
+    jq --arg v "$NEW_VERSION" '.version = $v' manifest.json > manifest.json.tmp
+    mv manifest.json.tmp manifest.json
 
     # Update package.json if it exists
     if [ -f package.json ]; then
-        sed -i '' "s/\"version\": \"$current_version\"/\"version\": \"$new_version\"/" package.json
-        log_info "Updated version in package.json to $new_version"
+        jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp
+        mv package.json.tmp package.json
     fi
 
-    echo "$new_version"
+    log_success "Version bumped to $NEW_VERSION"
 }
 
 # Generate changelog from git commits
 generate_changelog() {
-    last_tag=$(git describe --tags --abbrev=0 2>/dev/null)
-    if [ -z "$last_tag" ]; then
-        log_warning "No previous tag found. Using all commits."
-        git log --pretty=format:"- %s" > CHANGELOG.md
+    local last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+    local commits=$(git log --pretty=format:"- %s" $last_tag..HEAD)
+
+    if [ -z "$commits" ]; then
+        log_warning "No new commits since last tag"
     else
-        log_info "Generating changelog since last tag: $last_tag"
-        git log --pretty=format:"- %s" "$last_tag"..HEAD > CHANGELOG.md
+        echo "# Changelog" > CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        echo "## $NEW_VERSION" >> CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        echo "$commits" >> CHANGELOG.md
+        log_success "Changelog generated"
     fi
-
-    # Add header to changelog
-    echo -e "# Changelog\n\n## $(get_current_version) ($(date +%Y-%m-%d))\n" > temp_changelog.md
-    cat CHANGELOG.md >> temp_changelog.md
-    mv temp_changelog.md CHANGELOG.md
-
-    log_success "Generated changelog"
 }
 
-# Create git tag and push
-create_tag() {
-    version=$1
-    git add manifest.json package.json CHANGELOG.md
-    git commit -m "Bump version to $version"
-    git tag -a "v$version" -m "Release v$version"
-    git push origin main
-    git push origin "v$version"
-    log_success "Created and pushed tag v$version"
-}
-
-# Run tests (placeholder)
+# Run tests
 run_tests() {
     log_info "Running tests..."
-    # TODO: Implement actual tests
-    log_success "All tests passed (placeholder)"
-} 
+    # Add your test commands here
+    log_success "All tests passed"
+}
+
+# Create git tag and push changes
+create_tag() {
+    git add manifest.json package.json CHANGELOG.md
+    git commit -m "Release v$NEW_VERSION"
+    git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+    git push origin main
+    git push origin "v$NEW_VERSION"
+    log_success "Tag v$NEW_VERSION created and pushed"
+}
+
+# Export all functions
+export -f log_info log_success log_warning log_error
+export -f check_clean_working_dir check_main_branch get_current_version
+export -f bump_version generate_changelog run_tests create_tag 

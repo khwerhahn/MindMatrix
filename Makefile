@@ -221,31 +221,44 @@ reset:
 		exit 1; \
 	fi
 
-# Release workflow
-
 # Release targets
-release: release-patch
+.PHONY: release-major release-minor release-patch
 
 release-major:
-	@source scripts/release-utils.sh && \
+	@echo "🚀 Starting major release process..."
+	@bash -c 'source scripts/release-utils.sh && \
+	export -f check_clean_working_dir check_main_branch get_current_version bump_version generate_changelog run_tests create_tag && \
 	check_clean_working_dir && \
 	check_main_branch && \
-	bump_version "$$(get_current_version)" "major" && \
-	generate_changelog "$$(get_current_version)" && \
-	create_tag "$$(get_current_version)"
+	get_current_version && \
+	bump_version major && \
+	generate_changelog && \
+	run_tests && \
+	create_tag && \
+	echo "✅ Major release completed successfully!"'
 
 release-minor:
-	@source scripts/release-utils.sh && \
+	@echo "🚀 Starting minor release process..."
+	@bash -c 'source scripts/release-utils.sh && \
+	export -f check_clean_working_dir check_main_branch get_current_version bump_version generate_changelog run_tests create_tag && \
 	check_clean_working_dir && \
 	check_main_branch && \
-	bump_version "$$(get_current_version)" "minor" && \
-	generate_changelog "$$(get_current_version)" && \
-	create_tag "$$(get_current_version)"
+	get_current_version && \
+	bump_version minor && \
+	generate_changelog && \
+	run_tests && \
+	create_tag && \
+	echo "✅ Minor release completed successfully!"'
 
 release-patch:
-	@source scripts/release-utils.sh && \
+	@echo "🚀 Starting patch release process..."
+	@bash -c 'source scripts/release-utils.sh && \
+	export -f check_clean_working_dir check_main_branch get_current_version bump_version generate_changelog run_tests create_tag && \
 	check_clean_working_dir && \
 	check_main_branch && \
-	bump_version "$$(get_current_version)" "patch" && \
-	generate_changelog "$$(get_current_version)" && \
-	create_tag "$$(get_current_version)" 
+	get_current_version && \
+	bump_version patch && \
+	generate_changelog && \
+	run_tests && \
+	create_tag && \
+	echo "✅ Patch release completed successfully!"' 
