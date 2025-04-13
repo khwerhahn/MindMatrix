@@ -42,34 +42,47 @@ This includes:
 
 ---
 
-## Project Status and TODOs
+## Project Status
 
-Mind Matrix is under active development. The following tasks are planned for upcoming releases. Feel free to contribute or suggest additional features.
+### Completed ✅
+- Core database setup and configuration
+- Development environment setup
+- Basic plugin functionality
+- File synchronization system
+- Initial user interface
+
+### In Progress 🚧
+- Automated database setup for users
+- Improved error handling and user feedback
+- Documentation updates
+- Performance optimizations
+
+### Upcoming 📅
+- Advanced search features
+- Additional file type support
+- Developer tools and debugging features
+- Community features and collaboration tools
+
+For detailed task tracking and progress, see [TASKS.md](TASKS.md).
+
+## TODOs
 
 ### High Priority
-- **Thorough Testing:** Implement comprehensive tests for large vaults and concurrent operations
-- **Live Cycle Testing:** Create automated tests that verify file creation, modification, and deletion are properly reflected in the database
-- **UI Refinement:** Clean up and improve the settings UI for better user experience
-- **Documentation Updates:** Align documentation with the current state of the plugin
+- Implement automated database setup and connection testing
+- Add user-friendly error messages and troubleshooting guides
+- Create comprehensive documentation and tutorials
 
 ### Medium Priority
-- **Performance Optimization:** Improve handling of large vaults with many files
-- **Integration Guide:** Create dedicated documentation for n8n integration and Telegram bot setup
-- **Setup Guide Improvements:** Add clearer step-by-step instructions with screenshots
-- **Public Repository Setup:** Prepare GitHub repo for public collaboration and pull requests
+- Optimize performance for large vaults
+- Add more configuration options
+- Implement testing suite
 
-### Technical Debt
-- **Code Refactoring:** Further modularize components for better maintainability
-- **Error Handling:** Enhance error reporting and recovery mechanisms
-- **Logging System:** Improve the logging system for better debugging
-- **Unit Test Coverage:** Increase test coverage across core components
+### Low Priority
+- Support for additional file types
+- Advanced search features
+- Developer tools and monitoring
 
-### Future Features
-- **In-App Semantic Search:** Add a native search interface within Obsidian
-- **Alternative Embedding Providers:** Support for other embedding services beyond OpenAI
-- **Enhanced Metadata Extraction:** Improve handling of tags, links, and other metadata
-- **Visualization Tools:** Add tools to visualize connections between notes
-- **Multi-Model Support:** Allow using different embedding models for different types of content
+See [TASKS.md](TASKS.md) for detailed task breakdown and progress tracking.
 
 ---
 
@@ -207,32 +220,3 @@ The project includes comprehensive documentation to help developers understand a
    ```bash
    yarn install
    ```
-3. Create `.env` file:
-   ```bash
-   cp .env.test .env
-   ```
-4. Update `.env` with your credentials:
-   - Supabase project URL
-   - Supabase database password
-   - OpenAI API key
-5. Initialize the project:
-   ```bash
-   make init
-   ```
-
-### Development Commands
-- `make dev`: Start the development server
-- `make test-db`: Test the database connection
-- `make reset`: Reset and set up the database
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
