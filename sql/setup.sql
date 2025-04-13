@@ -5,6 +5,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
 DROP FUNCTION IF EXISTS public.enable_vectors();
 DROP FUNCTION IF EXISTS public.match_documents(vector(1536), TEXT, INT);
 DROP FUNCTION IF EXISTS public.init_obsidian_notes();
+DROP FUNCTION IF EXISTS public.drop_tables_if_exist();
+DROP FUNCTION IF EXISTS public.create_required_tables();
 
 -- Drop the existing tables to ensure a fresh installation
 DROP TABLE IF EXISTS public.obsidian_documents;
@@ -111,6 +113,68 @@ END;
 $$;
 
 -------------------------------------------------
+-- Function to drop tables if they exist
+-------------------------------------------------
+CREATE OR REPLACE FUNCTION public.drop_tables_if_exist()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    DROP TABLE IF EXISTS public.obsidian_documents;
+    DROP TABLE IF EXISTS public.obsidian_file_status;
+END;
+$$;
+
+-------------------------------------------------
+-- Function to create required tables
+-------------------------------------------------
+CREATE OR REPLACE FUNCTION public.create_required_tables()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    -- Create obsidian_documents table
+    CREATE TABLE IF NOT EXISTS public.obsidian_documents (
+        id BIGSERIAL PRIMARY KEY,
+        vault_id TEXT NOT NULL,
+        obsidian_id TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        content TEXT,
+        metadata JSONB,
+        embedding vector(1536),
+        last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        vectorized_at TIMESTAMPTZ,
+        UNIQUE(vault_id, obsidian_id, chunk_index)
+    );
+
+    -- Create obsidian_file_status table
+    CREATE TABLE IF NOT EXISTS public.obsidian_file_status (
+        id BIGSERIAL PRIMARY KEY,
+        vault_id TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        last_modified BIGINT NOT NULL,
+        last_vectorized TIMESTAMPTZ,
+        content_hash TEXT,
+        status TEXT,
+        tags TEXT[],
+        aliases TEXT[],
+        links TEXT[],
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(vault_id, file_path)
+    );
+
+    -- Create indexes
+    CREATE INDEX IF NOT EXISTS idx_vault_obsidian ON public.obsidian_documents(vault_id, obsidian_id);
+    CREATE INDEX IF NOT EXISTS idx_file_status_vault_path ON public.obsidian_file_status(vault_id, file_path);
+END;
+$$;
+
+-------------------------------------------------
 -- Grant necessary permissions to the service_role
 -------------------------------------------------
 GRANT USAGE ON SCHEMA public TO service_role;
@@ -122,6 +186,8 @@ GRANT ALL ON ALL ROUTINES IN SCHEMA public TO service_role;
 GRANT EXECUTE ON FUNCTION public.enable_vectors() TO service_role;
 GRANT EXECUTE ON FUNCTION public.init_obsidian_notes() TO service_role;
 GRANT EXECUTE ON FUNCTION public.match_documents(vector(1536), TEXT, INT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.drop_tables_if_exist() TO service_role;
+GRANT EXECUTE ON FUNCTION public.create_required_tables() TO service_role;
 
 -- Set default privileges for future objects in the public schema
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
