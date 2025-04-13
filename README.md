@@ -84,26 +84,6 @@ This includes:
 - Community features and collaboration tools
 
 For detailed task tracking and progress, see [TASKS.md](TASKS.md).
-
-## TODOs
-
-### High Priority
-- Complete documentation updates
-- Implement comprehensive testing suite
-- Optimize performance for large vaults
-
-### Medium Priority
-- Add more configuration options
-- Enhance error recovery mechanisms
-- Improve offline support
-
-### Low Priority
-- Support for additional file types
-- Advanced search features
-- Developer tools and monitoring
-
-See [TASKS.md](TASKS.md) for detailed task breakdown and progress tracking.
-
 ---
 
 ## For Developers
