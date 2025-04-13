@@ -84,6 +84,7 @@ This includes:
 - Community features and collaboration tools
 
 For detailed task tracking and progress, see [TASKS.md](TASKS.md).
+
 ---
 
 ## For Developers
@@ -203,9 +204,11 @@ This project is licensed under the MIT License.
 ### Documentation
 The project includes comprehensive documentation to help developers understand and contribute to the codebase:
 
-- [ARCHITECTURE.md](ARCHITECTURE.md): Detailed overview of the system architecture, components, and data flow
-- [TASKS.md](TASKS.md): Current sprint progress, upcoming tasks, and project backlog
-- [DEVELOPMENT.md](DEVELOPMENT.md): Setup instructions, development workflow, and contribution guidelines
+- [Installation Guide](INSTALL.md)
+- [Development Guide](DEVELOPMENT.md)
+- [Architecture Overview](ARCHITECTURE.md)
+- [Changelog](CHANGELOG.md)
+- [Task Tracking](TASKS.md)
 
 ### Prerequisites
 - Node.js (v16 or later)

@@ -1,11 +1,13 @@
 # MindMatrix Architecture
 
 ## Overview
-MindMatrix is an Obsidian plugin that enhances note-taking by synchronizing documents with a Supabase vector database for AI-powered search. The plugin provides semantic search capabilities through OpenAI embeddings while maintaining data integrity and user experience.
+MindMatrix is an Obsidian plugin that enhances note-taking by synchronizing documents with a Supabase vector database for AI-powered search. The plugin provides semantic search capabilities through OpenAI embeddings while maintaining data integrity and user experience. It operates entirely within the Obsidian environment, using remote services (Supabase and OpenAI) for data storage and processing.
+
+The primary purpose of MindMatrix is to enable the creation of chatbots through n8n that can query and interact with your Obsidian knowledge base. By storing document embeddings in Supabase, the plugin makes your entire vault searchable and accessible to AI-powered applications, allowing you to build custom workflows and chatbots that can leverage your personal knowledge base.
 
 ## Core Components
 
-### 1. Database Layer
+### 1. Database Layer (Supabase)
 - **PostgreSQL Database**: Stores document metadata and relationships
 - **Tables**:
   - `obsidian_documents`: Stores document chunks with embeddings and metadata
@@ -18,7 +20,7 @@ MindMatrix is an Obsidian plugin that enhances note-taking by synchronizing docu
   - `get_related_documents`: Finds related documents
   - `update_document_status`: Updates document status
 
-### 2. Backend Layer
+### 2. Plugin Services
 - **Service-Oriented Design**:
   - **SupabaseService**: Handles all database interactions
     - Document chunk upserts
@@ -53,25 +55,26 @@ MindMatrix is an Obsidian plugin that enhances note-taking by synchronizing docu
   - **FileTracker**: Sync state management
   - **OfflineQueueManager**: Offline operation handling
 
-### 3. Frontend Layer
-- **Matrix View**: Visual representation of documents and relationships
+### 3. UI Layer
+- **Settings Interface**: Plugin configuration and status
 - **UI Components**:
-  - Document nodes
-  - Relationship lines
-  - Controls for filtering and layout
-- **State Management**: Handles document selection and view state
+  - Status indicators
+  - Progress bars
+  - Settings panels
+- **State Management**: Handles plugin state and user preferences
 
-### 4. Integration Layer
+### 4. Obsidian Integration
 - **Obsidian API Integration**: Interfaces with Obsidian's API
 - **Event Handling**: Manages Obsidian events (file changes, etc.)
 - **Settings Management**: Handles plugin configuration
+- **File System Integration**: Monitors and processes vault changes
 
 ## Data Flow
 1. User opens Obsidian
-2. Plugin initializes and connects to database
+2. Plugin initializes and connects to Supabase
 3. Document changes trigger updates to database
-4. Matrix view updates based on database state
-5. User interactions update view and database
+4. Status indicators update based on sync state
+5. User interactions update settings and trigger operations
 
 ## Processing Workflow
 - **File Event Tracking**:
@@ -99,6 +102,5 @@ MindMatrix is an Obsidian plugin that enhances note-taking by synchronizing docu
 ## Dependencies
 - Obsidian API
 - Supabase PostgreSQL
-- React (for UI components)
 - TypeScript
 - OpenAI API (for embeddings) 

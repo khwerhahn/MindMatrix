@@ -128,6 +128,39 @@ make reset
 4. Test database connection
 5. Verify embeddings generation
 
+## Changelog Maintenance
+
+We maintain a [CHANGELOG.md](CHANGELOG.md) to track all notable changes to the project. When making changes:
+
+1. Update the "Unreleased" section with your changes
+2. Categorize changes as:
+   - `Added` for new features
+   - `Changed` for changes in existing functionality
+   - `Deprecated` for soon-to-be removed features
+   - `Removed` for now removed features
+   - `Fixed` for any bug fixes
+   - `Security` for vulnerabilities
+
+Example:
+```markdown
+## [Unreleased]
+
+### Added
+- New feature description
+
+### Changed
+- Description of changes to existing features
+
+### Fixed
+- Bug fix description
+```
+
+When releasing a new version:
+1. Create a new section for the version
+2. Move all "Unreleased" changes to the new version
+3. Update the version number and date
+4. Commit with message "chore: release vX.Y.Z"
+
 ## Troubleshooting
 
 ### Database Connection Issues

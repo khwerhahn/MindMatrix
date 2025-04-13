@@ -25,6 +25,8 @@ data.json
 
 # Environment variables
 .env
+.env.*
+!.env.example
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
@@ -50,3 +52,27 @@ output.txt
 # Build files
 main.js
 *.js.map
+
+# TypeScript
+*.tsbuildinfo
+
+# Editor directories and files
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Cache directories
+.cache/
+.eslintcache
+.stylelintcache
+
+# Temporary files
+*.tmp
+*.temp
+.temp/
+.tmp/
+
+# Local development
+.local/
