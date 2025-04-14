@@ -101,23 +101,40 @@
   - [x] Show progress indicators
   - [x] Display clear success/error messages
 
-### 2. Documentation Updates
-- [ ] Update INSTALL.md with clearer instructions
-- [ ] Add troubleshooting guide
-- [ ] Create video tutorials for setup
-- [ ] Document common issues and solutions
+### 2. Exclusion Mechanism Enhancement
+- [ ] Implement database cleanup for excluded files
+  - [ ] Add method to remove files from database when they become excluded
+  - [ ] Handle both individual file and folder exclusions
+  - [ ] Update sync file to reflect exclusion changes
+  - [ ] Add progress indicators for cleanup operations
+
+- [ ] Add exclusion change monitoring
+  - [ ] Monitor changes to exclusion settings
+  - [ ] Trigger cleanup when exclusions are modified
+  - [ ] Handle batch exclusions efficiently
+  - [ ] Add logging for exclusion-related operations
+
+- [ ] Enhance file tracking for exclusions
+  - [ ] Update FileTracker to handle file moves to excluded folders
+  - [ ] Add detection of files becoming excluded
+  - [ ] Implement cleanup queue for excluded files
+  - [ ] Add retry mechanism for failed cleanup operations
+
+- [ ] Improve user feedback for exclusions
+  - [ ] Add notifications for exclusion-related changes
+  - [ ] Show progress during exclusion cleanup
+  - [ ] Display summary of excluded files
+  - [ ] Add confirmation for large exclusion operations
 
 ## Medium Priority
 
 ### 1. Performance Optimization
 - [ ] Implement batch processing for large vaults
 - [ ] Add progress indicators for sync operations
-- [ ] Optimize database queries
 - [ ] Add caching for frequently accessed data
 
 ### 2. User Experience Improvements
-- [ ] Add more configuration options
-- [ ] Improve error messages
+- [ ] Improve notifications - they are quite heavy currently
 - [ ] Add tooltips for settings
 - [ ] Create a settings migration system
 
@@ -126,23 +143,3 @@
 - [ ] Implement integration tests
 - [ ] Create test data generator
 - [ ] Add performance benchmarks
-
-## Low Priority
-
-### 1. Feature Enhancements
-- [ ] Add support for more file types
-- [ ] Implement advanced search filters
-- [ ] Add export functionality
-- [ ] Create API for external access
-
-### 2. Developer Tools
-- [ ] Add development mode
-- [ ] Create debugging tools
-- [ ] Implement logging system
-- [ ] Add performance monitoring
-
-### 3. Community Features
-- [ ] Create plugin templates
-- [ ] Add sharing functionality
-- [ ] Implement collaboration features
-- [ ] Create plugin marketplace 
