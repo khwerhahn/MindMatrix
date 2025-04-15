@@ -6,6 +6,9 @@ import {
 } from '../models/DocumentChunk';
 import { DEFAULT_CHUNKING_OPTIONS } from '../settings/Settings';
 import { MetadataExtractor } from '../services/MetadataExtractor';
+import { Vault, TFile } from 'obsidian';
+import { ErrorHandler } from './ErrorHandler';
+import { DebugSettings } from '../settings/Settings';
 
 export class TextSplitter {
 	private settings: {
@@ -20,12 +23,21 @@ export class TextSplitter {
 	private readonly YAML_FRONT_MATTER = /^---\n([\s\S]*?)\n---/;
 
 	constructor(
-		settings?: { chunkSize: number; chunkOverlap: number; minChunkSize: number },
-		metadataExtractor?: MetadataExtractor
+		private vault: Vault,
+		private errorHandler?: ErrorHandler,
+		private debug: boolean = false
 	) {
-		this.settings = settings || { ...DEFAULT_CHUNKING_OPTIONS };
+		this.settings = { ...DEFAULT_CHUNKING_OPTIONS };
 		this.validateSettings(this.settings);
-		this.metadataExtractor = metadataExtractor || new MetadataExtractor();
+		this.errorHandler = errorHandler || new ErrorHandler({
+			enableDebugLogs: debug,
+			logLevel: debug ? 'debug' : 'error',
+			logToFile: false
+		});
+		this.metadataExtractor = new MetadataExtractor(
+			this.vault,
+			this.errorHandler
+		);
 	}
 
 	/** Returns the current chunking settings. */
@@ -209,7 +221,7 @@ export class TextSplitter {
 				chunkCount: chunks.length,
 				chunkSizes: chunks.map(c => c.content.length),
 				chunkPreviews: chunks.map(c => ({
-					index: c.chunkIndex,
+					index: c.chunk_index,
 					size: c.content.length,
 					preview: c.content.substring(0, 100),
 				})),
@@ -237,8 +249,13 @@ export class TextSplitter {
 		}
 		return {
 			content: trimmedContent,
-			chunkIndex: index,
+			chunk_index: index,
 			metadata: { ...metadata },
+			vault_id: metadata.obsidianId,
+			file_status_id: 0, // This will be set by the caller
+			embedding: [],
+			vectorized_at: new Date().toISOString(),
+			updated_at: new Date().toISOString()
 		};
 	}
 
@@ -248,13 +265,8 @@ export class TextSplitter {
 		for (let i = chunksWithOverlap.length - 1; i > 0; i--) {
 			const currentChunk = { ...chunksWithOverlap[i] };
 			const previousChunk = chunksWithOverlap[i - 1];
-			const overlapText = previousChunk.content.slice(-this.settings.chunkOverlap);
-			if (overlapText) {
-				chunksWithOverlap[i] = {
-					...currentChunk,
-					content: overlapText + '\n\n' + currentChunk.content,
-				};
-			}
+			const overlapText = currentChunk.content.substring(0, this.settings.chunkOverlap);
+			previousChunk.content += '\n' + overlapText;
 		}
 		return chunksWithOverlap;
 	}

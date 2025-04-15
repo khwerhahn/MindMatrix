@@ -1,8 +1,14 @@
 // src/services/MetadataExtractor.ts
-import { TFile, parseYaml } from 'obsidian';
+import { TFile, parseYaml, Vault } from 'obsidian';
 import { DocumentMetadata, DocumentProcessingError } from '../models/DocumentChunk';
+import { ErrorHandler } from '../utils/ErrorHandler';
 
 export class MetadataExtractor {
+	constructor(
+		private vault: Vault,
+		private errorHandler: ErrorHandler
+	) {}
+
 	/**
 	 * Extracts all metadata from an Obsidian file
 	 */
@@ -24,6 +30,7 @@ export class MetadataExtractor {
 		// Extract optional aliases from frontmatter
 		const aliases = this.extractAliases(frontMatter);
 		if (aliases.length > 0) {
+			metadata.customMetadata = metadata.customMetadata || {};
 			metadata.customMetadata.aliases = aliases;
 		}
 

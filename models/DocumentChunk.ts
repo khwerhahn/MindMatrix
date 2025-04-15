@@ -30,16 +30,16 @@ export interface DocumentMetadata {
  * Represents a chunk of text from a document with its associated metadata
  */
 export interface DocumentChunk {
-    // Content of the chunk
+    id?: number;
+    vault_id: string;
+    file_status_id: number;
+    chunk_index: number;
     content: string;
-    // Index of the chunk within the document
-    chunkIndex: number;
-    // Associated metadata
-    metadata: DocumentMetadata;
-    // Optional embedding vector
-    embedding?: number[];
-    // Timestamp when the embedding was generated
-    vectorized_at?: string;
+    metadata: Record<string, any>;
+    embedding: number[];
+    vectorized_at: string;
+    created_at?: string;
+    updated_at?: string;
 }
 
 /**
@@ -135,4 +135,37 @@ export function validateMetadata(metadata: DocumentMetadata): boolean {
         metadata.size
         // Note: Not including optional fields in validation
     );
+}
+
+/**
+ * Represents a file status record in the database
+ */
+export interface FileStatusRecord {
+    id: number;
+    vault_id: string;
+    file_path: string;
+    last_modified: number;
+    last_vectorized: string;
+    content_hash: string;
+    status: string;
+    tags: string[];
+    aliases: string[];
+    links: string[];
+    created_at: string;
+    updated_at: string;
+}
+
+/**
+ * Represents a document record in the database
+ */
+export interface DocumentRecord {
+    id: number;
+    vault_id: string;
+    file_status_id: number;
+    chunk_index: number;
+    content: string;
+    metadata: DocumentMetadata;
+    embedding: number[];
+    last_updated: string;
+    vectorized_at?: string;
 }

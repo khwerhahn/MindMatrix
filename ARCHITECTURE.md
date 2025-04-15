@@ -30,8 +30,10 @@ The primary purpose of MindMatrix is to enable the creation of chatbots through 
     - Rate limiting
     - Error handling
   - **QueueService**: Orchestrates task processing
-    - Configurable concurrency
-    - Retry logic
+    - Strict sequential processing of events
+    - Single-threaded event queue
+    - Atomic operation guarantees
+    - Retry logic with backoff
     - EventEmitter for UI feedback
   - **SyncManager**: Manages synchronization
     - Local file state tracking
@@ -103,4 +105,104 @@ The primary purpose of MindMatrix is to enable the creation of chatbots through 
 - Obsidian API
 - Supabase PostgreSQL
 - TypeScript
-- OpenAI API (for embeddings) 
+- OpenAI API (for embeddings)
+
+## Obsidian-Specific Implementation
+
+### Obsidian Integration Guidelines
+- **Event System Integration**:
+  - Leverage Obsidian's built-in event system
+  - Follow Obsidian's file change detection patterns
+  - Respect Obsidian's file locking mechanisms
+  - Align with Obsidian's plugin lifecycle
+
+- **File System Considerations**:
+  - Use Obsidian's Vault API for file operations
+  - Follow Obsidian's file path conventions
+  - Handle Obsidian's file system events properly
+  - Respect Obsidian's file access patterns
+
+- **Plugin Architecture Alignment**:
+  - Implement as a proper Obsidian plugin
+  - Follow Obsidian's plugin development guidelines
+  - Use Obsidian's settings management
+  - Integrate with Obsidian's UI components
+
+### Implementation Requirements
+- **Architectural Compliance**:
+  - All implementations must follow the defined architecture
+  - Solutions must maintain atomic change guarantees
+  - Event queue processing must remain sequential
+  - State consistency must be preserved
+
+- **Obsidian-Specific Solutions**:
+  - Use Obsidian's native features when possible
+  - Implement custom solutions only when necessary
+  - Ensure solutions don't conflict with Obsidian's architecture
+  - Maintain compatibility with Obsidian updates
+
+- **Performance Considerations**:
+  - Minimize impact on Obsidian's performance
+  - Use efficient file system operations
+  - Implement proper cleanup and resource management
+  - Handle large vaults gracefully
+
+## Atomic Changes and Event Queue Processing
+
+### Atomic Changes
+- **Strict Sequential Processing**:
+  - All changes are processed one at a time
+  - No parallel processing of changes
+  - Each operation must complete before the next begins
+  - Guaranteed order of operations
+
+- **Change Isolation**:
+  - Each change is treated as an atomic unit
+  - Changes cannot be split or interrupted
+  - Failed changes are retried before proceeding
+  - Database transactions ensure atomicity
+
+- **State Consistency**:
+  - File status updates are atomic
+  - Document chunk operations are atomic
+  - No partial updates allowed
+  - Rollback on failure
+
+### Event Queue System
+- **Queue Structure**:
+  - Single-threaded event queue
+  - First-in-first-out (FIFO) processing
+  - Strict ordering of events
+  - No event skipping or reordering
+
+- **Event Processing**:
+  - Events are processed in exact order of receipt
+  - Each event must complete before next is processed
+  - Failed events block queue until resolved
+  - Retry mechanism with exponential backoff
+
+- **Queue Management**:
+  - Events are persisted during processing
+  - Queue state is maintained across restarts
+  - Offline events are queued for later processing
+  - Queue status is tracked and reported
+
+- **Event Types**:
+  - File creation events
+  - File modification events
+  - File deletion events
+  - File rename events
+  - Each type processed in strict order
+
+### Error Handling
+- **Queue Errors**:
+  - Failed events are retried automatically
+  - Maximum retry attempts with backoff
+  - Critical errors stop queue processing
+  - Error state is persisted and reported
+
+- **Recovery**:
+  - Queue can be resumed after errors
+  - State is preserved during interruptions
+  - Manual intervention possible for stuck events
+  - Error reporting and logging 

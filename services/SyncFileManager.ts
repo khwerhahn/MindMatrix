@@ -784,4 +784,49 @@ export class SyncFileManager {
 			return false;
 		}
 	}
+
+	/**
+	 * Updates the sync file to reflect exclusion changes
+	 * @param exclusions The current exclusion settings
+	 */
+	async updateSyncFileForExclusions(exclusions: {
+		excludedFolders: string[];
+		excludedFileTypes: string[];
+		excludedFilePrefixes: string[];
+		excludedFiles: string[];
+	}): Promise<void> {
+		try {
+			// Read current data if not cached
+			if (!this.currentSyncData) {
+				await this.readSyncFile();
+			}
+
+			if (this.currentSyncData) {
+				// Add an exclusion event to track the change
+				const event: ConnectionEvent = {
+					timestamp: Date.now(),
+					eventType: 'exclusion_update',
+					deviceId: this.deviceId,
+					details: `Exclusion settings updated. Folders: ${exclusions.excludedFolders.length}, Types: ${exclusions.excludedFileTypes.length}, Prefixes: ${exclusions.excludedFilePrefixes.length}, Files: ${exclusions.excludedFiles.length}`
+				};
+
+				// Update the sync file data
+				const updatedData = {
+					...this.currentSyncData,
+					connectionEvents: [...this.currentSyncData.connectionEvents, event]
+				};
+
+				// Trim arrays to prevent excessive growth
+				const trimmedData = trimSyncHistoryArrays(updatedData);
+
+				// Write updated data
+				await this.writeSyncFile(trimmedData);
+			}
+		} catch (error) {
+			this.errorHandler.handleError(error, {
+				context: 'SyncFileManager.updateSyncFileForExclusions',
+				metadata: { exclusions }
+			});
+		}
+	}
 }

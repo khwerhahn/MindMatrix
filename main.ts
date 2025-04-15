@@ -20,6 +20,7 @@ import {
 	getAllExclusions,
 	SYSTEM_EXCLUSIONS
 } from './settings/Settings';
+import { ProcessingTask, TaskType, TaskStatus } from './models/ProcessingTask';
 
 export default class MindMatrixPlugin extends Plugin {
 	settings: MindMatrixSettings;
@@ -55,6 +56,16 @@ export default class MindMatrixPlugin extends Plugin {
 			await this.initializeCoreServices();
 			await this.initializeVaultIfNeeded();
 
+			// Initialize FileTracker early to capture events
+			this.fileTracker = new FileTracker(
+				this.app.vault,
+				this.errorHandler!,
+				this.settings.sync.syncFilePath
+			);
+
+			// Register event handlers immediately to capture all events
+			this.registerEventHandlers();
+
 			// Add settings tab
 			this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
 
@@ -85,6 +96,21 @@ export default class MindMatrixPlugin extends Plugin {
 		try {
 			// Stop monitoring as we've reached a quiet period
 			this.syncDetectionManager?.stopMonitoring();
+
+			// Check if the vault has already been synced
+			if (this.syncManager && this.supabaseService) {
+				const syncStatus = await this.syncManager.validateSyncState();
+				if (syncStatus.isValid) {
+					// Perform a quick integrity check with the database
+					const fileCount = await this.supabaseService.getFileCount();
+					if (fileCount > 0) {
+						console.log('[MindMatrix] Database contains files, skipping initial sync');
+						await this.completeInitialization();
+						return;
+					}
+				}
+			}
+
 			this.statusManager?.setStatus(PluginStatus.CHECKING_FILE, {
 				message: 'Initializing sync manager with updated sync file format...'
 			});
@@ -105,9 +131,31 @@ export default class MindMatrixPlugin extends Plugin {
 
 	private async completeInitialization(): Promise<void> {
 		try {
+			// Wait for services to be initialized
+			await this.initializeServices();
+
+			// Ensure FileTracker is initialized before registering event handlers
+			if (!this.fileTracker?.getInitializationStatus()) {
+				console.warn('[MindMatrix] FileTracker not initialized. Waiting for initialization...');
+				await new Promise<void>((resolve) => {
+					const checkInterval = setInterval(() => {
+						if (this.fileTracker?.getInitializationStatus()) {
+							clearInterval(checkInterval);
+							resolve();
+						}
+					}, 100);
+					// Timeout after 10 seconds
+					setTimeout(() => {
+						clearInterval(checkInterval);
+						resolve();
+					}, 10000);
+				});
+			}
+
 			// Register event handlers and commands
 			this.registerEventHandlers();
 			this.addCommands();
+			
 			// Update status to ready
 			this.statusManager?.setStatus(PluginStatus.READY, {
 				message: 'Mind Matrix is ready'
@@ -209,9 +257,13 @@ export default class MindMatrixPlugin extends Plugin {
 	private async initializeCoreServices(): Promise<void> {
 		this.statusManager?.setStatus(PluginStatus.INITIALIZING, { message: 'Initializing core services...' });
 		// Initialize error handler
-		this.errorHandler = new ErrorHandler(this.settings?.debug ?? DEFAULT_SETTINGS.debug, this.app.vault.adapter.getBasePath());
+		this.errorHandler = new ErrorHandler(this.settings?.debug ?? DEFAULT_SETTINGS.debug);
 		// Initialize notification manager
-		this.notificationManager = new NotificationManager(this.addStatusBarItem(), this.settings?.enableNotifications ?? true, this.settings?.enableProgressBar ?? true);
+		this.notificationManager = new NotificationManager(
+			this.addStatusBarItem(),
+			this.settings?.enableNotifications ?? true,
+			this.settings?.enableProgressBar ?? true
+		);
 		this.statusManager?.setStatus(PluginStatus.INITIALIZING, { message: 'Core services initialized' });
 	}
 
@@ -290,84 +342,104 @@ export default class MindMatrixPlugin extends Plugin {
 		}
 	}
 
-	private async initializeServices() {
-		console.log('Initializing services...', { hasVault: !!this.app.vault, hasErrorHandler: !!this.errorHandler });
-		if (!this.errorHandler) throw new Error('Core services not initialized');
-		try {
-			// Initialize FileTracker with refined change detection and debouncing.
-			this.fileTracker = new FileTracker(this.app.vault, this.errorHandler, this.settings.sync.syncFilePath);
-			await this.fileTracker.initialize();
-			console.log('FileTracker initialized.');
+	private async initializeServices(): Promise<void> {
+		console.log('[MindMatrix] Initializing services...', {
+			hasVault: !!this.app.vault,
+			hasErrorHandler: !!this.errorHandler
+		});
 
-			// Initialize Supabase service
-			try {
-				this.supabaseService = await SupabaseService.getInstance(this.settings);
-				if (!this.supabaseService) {
-					new Notice('Supabase service not initialized. Please configure your API settings.');
-					console.error('Supabase service initialization failed: Missing configuration.');
-					return;
-				}
-				console.log('Supabase service initialized.');
-			} catch (error) {
-				console.error('Supabase initialization error:', error);
-				new Notice(`Failed to initialize Supabase service: ${error.message}`);
-				return;
+		if (!this.errorHandler) {
+			throw new Error('Error handler must be initialized before services');
+		}
+
+		try {
+			// Initialize Supabase service first
+			this.supabaseService = await SupabaseService.getInstance(this.settings);
+			if (!this.supabaseService) {
+				throw new Error('Failed to initialize Supabase service');
 			}
+			console.log('[MindMatrix] Supabase service initialized.');
 
 			// Initialize OpenAI service
 			this.openAIService = new OpenAIService(this.settings.openai, this.errorHandler);
-			console.log('OpenAI service initialized.');
+			console.log('[MindMatrix] OpenAI service initialized.');
 
-			if (!this.app.vault) throw new Error('Vault is not available');
+			// Initialize QueueService
+			const notificationManager = this.notificationManager || new NotificationManager(
+				this.addStatusBarItem(),
+				this.settings.enableNotifications,
+				this.settings.enableProgressBar
+			);
 
-			// Initialize queue service with improved collision handling and progress reporting.
-			if (this.notificationManager && this.supabaseService && this.openAIService) {
-				try {
-					this.queueService = new QueueService(
-						this.settings.queue.maxConcurrent,
-						this.settings.queue.retryAttempts,
-						this.supabaseService,
-						this.openAIService,
-						this.errorHandler,
-						this.notificationManager,
-						this.app.vault,
-						this.settings.chunking
-					);
-					this.queueService.start();
-					console.log('Queue service initialized and started.');
-				} catch (error) {
-					console.error('Failed to initialize QueueService:', error);
-					new Notice(`Failed to initialize queue service: ${error.message}`);
-					throw error;
-				}
-			} else {
-				throw new Error('Required services not available for QueueService initialization');
-			}
+			this.queueService = new QueueService(
+				this.settings.queue.maxConcurrent,
+				this.settings.queue.retryAttempts,
+				this.supabaseService,
+				this.openAIService,
+				this.errorHandler,
+				notificationManager,
+				this.app.vault,
+				this.settings.chunking
+			);
+			await this.queueService.start();
+			console.log('[MindMatrix] Queue service initialized and started.');
 
-			this.metadataExtractor = new MetadataExtractor();
-			console.log('MetadataExtractor initialized.');
+			// Initialize FileTracker
+			this.fileTracker = new FileTracker(
+				this.app.vault,
+				this.errorHandler,
+				this.settings.sync.syncFilePath,
+				this.supabaseService
+			);
+			await this.fileTracker.initialize(this.settings, this.supabaseService, this.queueService);
+			console.log('[MindMatrix] FileTracker initialized.');
+
+			// Initialize MetadataExtractor
+			this.metadataExtractor = new MetadataExtractor(this.app.vault, this.errorHandler);
+			console.log('[MindMatrix] MetadataExtractor initialized.');
 
 			// Initialize InitialSyncManager
-			if (this.queueService && this.syncManager && this.metadataExtractor) {
-				const initialSyncOptions = {
-					...this.settings.initialSync,
-					syncFilePath: this.settings.sync.syncFilePath,
-					exclusions: getAllExclusions(this.settings)
-				};
-				this.initialSyncManager = new InitialSyncManager(
-					this.app.vault,
-					this.queueService,
-					this.syncManager,
-					this.metadataExtractor,
-					this.errorHandler,
-					this.notificationManager,
-					this.supabaseService,
-					initialSyncOptions
-				);
-				console.log('InitialSyncManager initialized.');
+			if (!this.syncManager) {
+				throw new Error('SyncManager must be initialized before InitialSyncManager');
 			}
+			if (!this.queueService) {
+				throw new Error('QueueService must be initialized before InitialSyncManager');
+			}
+			if (!this.metadataExtractor) {
+				throw new Error('MetadataExtractor must be initialized before InitialSyncManager');
+			}
+			if (!this.errorHandler) {
+				throw new Error('ErrorHandler must be initialized before InitialSyncManager');
+			}
+			if (!this.notificationManager) {
+				throw new Error('NotificationManager must be initialized before InitialSyncManager');
+			}
+			this.initialSyncManager = new InitialSyncManager(
+				this.app.vault,
+				this.queueService,
+				this.syncManager,
+				this.metadataExtractor,
+				this.errorHandler,
+				this.notificationManager,
+				this.supabaseService,
+				{
+					batchSize: this.settings.initialSync.batchSize || 50,
+					maxConcurrentBatches: this.settings.initialSync.maxConcurrentBatches || 3,
+					enableAutoInitialSync: this.settings.initialSync.enableAutoInitialSync,
+					priorityRules: this.settings.initialSync.priorityRules || [],
+					syncFilePath: this.settings.sync.syncFilePath,
+					exclusions: {
+						excludedFolders: this.settings.exclusions.excludedFolders || [],
+						excludedFileTypes: this.settings.exclusions.excludedFileTypes || [],
+						excludedFilePrefixes: this.settings.exclusions.excludedFilePrefixes || [],
+						excludedFiles: this.settings.exclusions.excludedFiles || []
+					}
+				}
+			);
+			console.log('[MindMatrix] InitialSyncManager initialized.');
 		} catch (error) {
-			console.error('Failed to initialize services:', error);
+			console.error('[MindMatrix] Error initializing services:', error);
+			this.errorHandler.handleError(error, { context: 'MindMatrixPlugin.initializeServices' });
 			throw error;
 		}
 	}
@@ -394,7 +466,7 @@ export default class MindMatrixPlugin extends Plugin {
 				if (!this.shouldProcessFile(file)) return;
 				console.log(`File created: ${file.path}`);
 				await this.fileTracker?.handleCreate(file);
-				await this.queueFileProcessing(file, 'CREATE');
+				await this.queueFileProcessing(file, TaskType.CREATE);
 			})
 		);
 
@@ -409,7 +481,7 @@ export default class MindMatrixPlugin extends Plugin {
 				console.log(`File modified: ${file.path}`);
 				// Enhanced debouncing is handled in FileTracker.handleModify
 				await this.fileTracker?.handleModify(file);
-				await this.queueFileProcessing(file, 'UPDATE');
+				await this.queueFileProcessing(file, TaskType.UPDATE);
 			})
 		);
 
@@ -427,7 +499,7 @@ export default class MindMatrixPlugin extends Plugin {
 				if (!this.shouldProcessFile(file)) return;
 				console.log(`File deleted: ${file.path}`);
 				await this.fileTracker?.handleDelete(file);
-				await this.queueFileProcessing(file, 'DELETE');
+				await this.queueFileProcessing(file, TaskType.DELETE);
 			})
 		);
 
@@ -441,7 +513,6 @@ export default class MindMatrixPlugin extends Plugin {
 				if (!this.shouldProcessFile(file)) return;
 				console.log(`File renamed from ${oldPath} to ${file.path}`);
 				await this.fileTracker?.handleRename(file, oldPath);
-				await this.handleFileRename(file, oldPath);
 			})
 		);
 	}
@@ -509,7 +580,7 @@ export default class MindMatrixPlugin extends Plugin {
 		}
 	}
 
-	private async queueFileProcessing(file: TFile, type: 'CREATE' | 'UPDATE' | 'DELETE'): Promise<void> {
+	private async queueFileProcessing(file: TFile, type: TaskType.CREATE | TaskType.UPDATE | TaskType.DELETE): Promise<void> {
 		try {
 			if (!this.queueService || !this.fileTracker) {
 				console.error('Required services not initialized:', { queueService: !!this.queueService, fileTracker: !!this.fileTracker });
@@ -518,15 +589,15 @@ export default class MindMatrixPlugin extends Plugin {
 			console.log('Queueing file processing:', { fileName: file.name, type, path: file.path });
 			const metadata = await this.fileTracker.createFileMetadata(file);
 			console.log('Created metadata:', metadata);
-			const task = {
+			const task: ProcessingTask = {
 				id: file.path,
 				type: type,
-				priority: type === 'DELETE' ? 2 : 1,
+				priority: type === TaskType.DELETE ? 2 : 1,
 				maxRetries: this.settings.queue.retryAttempts,
 				retryCount: 0,
 				createdAt: Date.now(),
 				updatedAt: Date.now(),
-				status: 'PENDING',
+				status: TaskStatus.PENDING,
 				metadata,
 				data: {}
 			};
@@ -546,37 +617,6 @@ export default class MindMatrixPlugin extends Plugin {
 		}
 	}
 
-	private async handleFileRename(file: TFile, oldPath: string) {
-		try {
-			if (!this.supabaseService) return;
-			// First update the file status record to use the new path.
-			await this.supabaseService.updateFilePath(oldPath, file.path);
-
-			// Then, if there are document chunks for the old path, update them as well.
-			const chunks = await this.supabaseService.getDocumentChunks(oldPath);
-			if (chunks.length > 0) {
-				const updatedChunks = chunks.map(chunk => ({
-					...chunk,
-					metadata: {
-						...chunk.metadata,
-						obsidianId: file.path,
-						path: file.path
-					}
-				}));
-				await this.supabaseService.deleteDocumentChunks(oldPath);
-				await this.supabaseService.upsertChunks(updatedChunks);
-			}
-			if (this.settings.enableNotifications) {
-				new Notice(`Updated database entries for renamed file: ${file.name}`);
-			}
-		} catch (error) {
-			this.errorHandler?.handleError(error, { context: 'handleFileRename', metadata: { filePath: file.path, oldPath } });
-			if (this.settings.enableNotifications) {
-				new Notice(`Failed to update database for renamed file: ${file.name}`);
-			}
-		}
-	}
-
 	private addCommands() {
 		this.addCommand({
 			id: 'force-sync-current-file',
@@ -585,7 +625,7 @@ export default class MindMatrixPlugin extends Plugin {
 				const file = this.app.workspace.getActiveFile();
 				if (file) {
 					if (!checking) {
-						this.queueFileProcessing(file, 'UPDATE');
+						this.queueFileProcessing(file, TaskType.UPDATE);
 					}
 					return true;
 				}
@@ -600,7 +640,7 @@ export default class MindMatrixPlugin extends Plugin {
 				const files = this.app.vault.getMarkdownFiles();
 				for (const file of files) {
 					if (this.shouldProcessFile(file)) {
-						await this.queueFileProcessing(file, 'UPDATE');
+						await this.queueFileProcessing(file, TaskType.UPDATE);
 					}
 				}
 			}
@@ -622,7 +662,9 @@ export default class MindMatrixPlugin extends Plugin {
 			name: 'Reset file tracker cache',
 			callback: async () => {
 				this.fileTracker?.clearQueue();
-				await this.fileTracker?.initialize();
+				if (this.fileTracker && this.settings && this.supabaseService && this.queueService) {
+					await this.fileTracker.initialize(this.settings, this.supabaseService, this.queueService);
+				}
 				if (this.settings.enableNotifications) {
 					new Notice('File tracker cache reset');
 				}

@@ -124,41 +124,61 @@ export class InitialSyncManager {
 	 * Scans all markdown files in the vault and updates their status in the database.
 	 * Resumes from the last processed file if the sync is interrupted.
 	 */
-	async startSync(): Promise<void> {
-		if (this.isRunning) {
-			console.log('Initial sync already running');
-			return;
-		}
+	public async startSync(): Promise<void> {
 		try {
-			this.isRunning = true;
-			this.progress.startTime = Date.now();
-			console.log('Starting initial sync...');
+			console.log('[MindMatrix] Starting initial sync...');
+			
+			// Check if files are already in the database
+			if (this.supabaseService) {
+				const existingFiles = await this.supabaseService.getFileCount();
+				if (existingFiles > 0) {
+					console.log('[MindMatrix] Files already exist in database, skipping initial sync');
+					return;
+				}
+			}
 
-			// Get and filter all markdown files
-			const allFiles = this.vault.getMarkdownFiles();
-			const files = this.filterExcludedFiles(allFiles);
-			this.resumeFileList = await this.sortFilesByPriority(files);
-			this.progress.totalFiles = this.resumeFileList.length;
-			console.log(`Total files to sync: ${this.progress.totalFiles}`);
+			// Get all markdown files from the vault
+			const files = this.vault.getMarkdownFiles();
+			const filesToSync = files.filter(file => {
+				const path = file.path;
+				return !this.isExcluded(path);
+			});
 
-			// Create batches from the files starting from lastProcessedIndex
-			this.batches = this.createBatches(this.resumeFileList.slice(this.lastProcessedIndex));
-			this.progress.totalBatches = this.batches.length;
-			console.log(`Created ${this.progress.totalBatches} batches for syncing`);
+			if (filesToSync.length === 0) {
+				console.log('[MindMatrix] No files to sync');
+				return;
+			}
 
-			// Process each batch concurrently with a limit
-			await this.processBatches();
+			console.log(`[MindMatrix] Total files to sync: ${filesToSync.length}`);
 
-			new Notice('Initial sync completed successfully');
-			console.log('Initial sync completed');
-			// Reset resume index on success
-			this.lastProcessedIndex = 0;
+			// Sort files by priority (newer files first)
+			filesToSync.sort((a, b) => {
+				const aStat = this.vault.getFileByPath(a.path)?.stat;
+				const bStat = this.vault.getFileByPath(b.path)?.stat;
+				return (bStat?.mtime || 0) - (aStat?.mtime || 0);
+			});
+
+			// Create batches
+			const batchSize = this.options.batchSize || 10;
+			const batches: TFile[][] = [];
+			for (let i = 0; i < filesToSync.length; i += batchSize) {
+				batches.push(filesToSync.slice(i, i + batchSize));
+			}
+
+			console.log(`[MindMatrix] Created ${batches.length} batches for syncing`);
+
+			// Process each batch
+			for (let i = 0; i < batches.length; i++) {
+				const batch = batches[i];
+				console.log(`[MindMatrix] Processing batch-${i} with ${batch.length} files`);
+				await this.processBatch(batch);
+				console.log(`[MindMatrix] Batch batch-${i} completed in ${Date.now() - startTime} ms`);
+			}
+
+			console.log('[MindMatrix] Initial sync completed');
 		} catch (error) {
-			this.errorHandler.handleError(error, { context: 'InitialSyncManager.startSync' });
-			new Notice('Initial sync failed. Check console for details.');
-			// Resume from the last processed index on failure
-		} finally {
-			this.isRunning = false;
+			console.error('[MindMatrix] Error during initial sync:', error);
+			throw error;
 		}
 	}
 
@@ -391,5 +411,37 @@ export class InitialSyncManager {
 	 */
 	updateOptions(options: Partial<InitialSyncOptions>): void {
 		Object.assign(this.options, options);
+	}
+
+	private isExcluded(path: string): boolean {
+		const exclusions = this.options.exclusions || {
+			excludedFolders: [],
+			excludedFileTypes: [],
+			excludedFilePrefixes: [],
+			excludedFiles: []
+		};
+
+		// Check if file is in an excluded folder
+		if (exclusions.excludedFolders.some(folder => path.startsWith(folder))) {
+			return true;
+		}
+
+		// Check if file has an excluded extension
+		const fileExtension = path.split('.').pop()?.toLowerCase();
+		if (fileExtension && exclusions.excludedFileTypes.includes(fileExtension)) {
+			return true;
+		}
+
+		// Check if file starts with an excluded prefix
+		if (exclusions.excludedFilePrefixes.some(prefix => path.startsWith(prefix))) {
+			return true;
+		}
+
+		// Check if file is in the specific files list
+		if (exclusions.excludedFiles.includes(path)) {
+			return true;
+		}
+
+		return false;
 	}
 }
