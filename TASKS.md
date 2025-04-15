@@ -1,145 +1,118 @@
-# MindMatrix Tasks
+# Implementation Plan to Align with ARCHITECTURE.md
 
-## Current Sprint
+## 1. Database Layer Updates
+- [ ] Create migration script to rename `file_id` to `file_status_id` in `obsidian_documents`
+- [ ] Update all code references to use new column name
+- [ ] Add foreign key constraint between `obsidian_documents` and `obsidian_file_status`
+- [ ] Update SQL queries to use proper join conditions
+- [ ] Test data integrity after migration
 
-### Database Setup ✅
-- [x] Create database tables
-  - [x] `obsidian_documents` with embeddings support
-  - [x] `obsidian_file_status` with comprehensive tracking
-- [x] Set up database functions
-  - [x] Semantic search function
-  - [x] Metadata retrieval functions
-- [x] Configure Supabase connection
-- [x] Create reset and setup scripts
+## 2. Atomic Operations Implementation
+- [ ] Audit all database operations for atomicity
+- [ ] Implement proper transaction blocks for:
+  - File status updates
+  - Document content updates
+  - Combined operations
+- [ ] Add rollback mechanisms for failed operations
+- [ ] Ensure file status and document operations are atomic
+- [ ] Add validation checks for atomic operations
 
-### Development Environment ✅
-- [x] Set up Makefile
-- [x] Configure environment variables
-- [x] Add database connection testing
-- [x] Add initialization script
+## 3. Event Queue Processing
+- [ ] Review QueueService implementation
+- [ ] Implement strict single-threaded processing
+- [ ] Add event persistence mechanism
+- [ ] Implement proper event ordering
+- [ ] Add queue state tracking
+- [ ] Add queue recovery mechanisms
+- [ ] Test queue behavior under various scenarios
 
-### Core Services Implementation ✅
-- [x] Create SupabaseService
-  - [x] Database connection handling
-  - [x] Document chunk management
-  - [x] File status tracking
-- [x] Implement OpenAIService
-  - [x] Embeddings generation
-  - [x] Rate limiting
-  - [x] Error handling
-- [x] Set up QueueService
-  - [x] Task processing
-  - [x] Retry logic
-  - [x] Progress tracking
-- [x] Develop SyncManager
-  - [x] Sync file management
-  - [x] Database fallback
-- [x] Create EventEmitter system
-- [x] Implement StatusManager
-  - [x] Status icons
-  - [x] Progress tracking
-- [x] Set up SyncDetectionManager
-- [x] Create InitialSyncManager
-  - [x] Batch processing
-  - [x] Resume functionality
+## 4. File Status vs Document Content Separation
+- [ ] Audit all file operations
+- [ ] Separate file status updates from content updates
+- [ ] Ensure file status is updated before content
+- [ ] Add validation for file status existence
+- [ ] Implement proper cleanup of orphaned records
+- [ ] Test separation of concerns
 
-### Utility Implementation ✅
-- [x] Develop TextSplitter
-  - [x] Configurable chunking
-  - [x] Overlap handling
-- [x] Create ErrorHandler
-  - [x] Centralized error management
-  - [x] Logging system
-- [x] Implement NotificationManager
-  - [x] Progress feedback
-  - [x] Error notifications
-- [x] Set up FileTracker
-  - [x] Event tracking
-  - [x] Sync state management
-- [x] Create OfflineQueueManager
-  - [x] Operation queuing
-  - [x] Offline reconciliation
+## 5. Obsidian Integration Optimization
+- [ ] Review event handling implementation
+- [ ] Optimize file system operations
+- [ ] Implement proper cleanup procedures
+- [ ] Add performance monitoring
+- [ ] Test integration with Obsidian's features
+- [ ] Ensure compatibility with Obsidian updates
 
+## 6. Error Handling and Recovery
+- [ ] Implement comprehensive error handling
+- [ ] Add retry mechanisms with exponential backoff
+- [ ] Add state recovery procedures
+- [ ] Implement proper logging system
+- [ ] Add error reporting mechanisms
+- [ ] Test error scenarios and recovery
 
-## High Priority
+## 7. State Consistency
+- [ ] Implement proper state tracking
+- [ ] Add validation checks for state consistency
+- [ ] Ensure consistent state across operations
+- [ ] Add recovery mechanisms for inconsistent states
+- [ ] Test state management under various conditions
 
-### 1. Database Connection and Setup Automation ✅
-- [x] Implement automatic database connection testing
-  - [x] Add connection status indicator in settings
-  - [x] Test connection when settings are saved
-  - [x] Show clear error messages for connection failures
+## 8. Performance Optimization
+- [ ] Review file operations for optimization
+- [ ] Implement batch processing where possible
+- [ ] Add performance monitoring
+- [ ] Optimize database queries
+- [ ] Test with large vaults
+- [ ] Implement cleanup procedures
 
-- [x] Add automatic table setup
-  - [x] Check for existing tables on connection
-  - [x] Run setup scripts if tables don't exist
-  - [x] Show progress indicators during setup
-  - [x] Display success/error messages
+## Testing Strategy
+- [ ] Unit tests for atomic operations
+- [ ] Integration tests for queue processing
+- [ ] Performance tests with large vaults
+- [ ] Error scenario tests
+- [ ] Recovery procedure tests
+- [ ] State consistency tests
 
-- [x] Add database reset functionality
-  - [x] Create "Reset Database" button in settings
-  - [x] Implement confirmation dialog
-  - [x] Add progress indicators for reset process
-  - [x] Show success message after reset
+## Implementation Phases
 
-- [x] Create DatabaseManager class
-  - [x] Implement connection testing methods
-  - [x] Add table existence checks
-  - [x] Create setup script execution
-  - [x] Add reset functionality
+### Phase 1: Database Structure
+- [ ] Create migration scripts
+- [ ] Update table relationships
+- [ ] Add necessary constraints
+- [ ] Test data integrity
+- [ ] Document changes
 
-- [x] Improve error handling
-  - [x] Add clear error messages for:
-    - Invalid credentials
-    - Network connectivity issues
-    - Permission problems
-    - Table creation failures
-  - [x] Include troubleshooting steps in error messages
+### Phase 2: Atomic Operations
+- [ ] Implement transaction blocks
+- [ ] Add rollback mechanisms
+- [ ] Test atomicity
+- [ ] Add validation
+- [ ] Document procedures
 
-- [x] Update user interface
-  - [x] Add visual feedback for operations
-  - [x] Include explanatory tooltips
-  - [x] Show progress indicators
-  - [x] Display clear success/error messages
+### Phase 3: Event Queue
+- [ ] Implement strict sequencing
+- [ ] Add persistence
+- [ ] Add state tracking
+- [ ] Test queue behavior
+- [ ] Document queue implementation
 
-### 2. Exclusion Mechanism Enhancement
-- [ ] Implement database cleanup for excluded files
-  - [ ] Add method to remove files from database when they become excluded
-  - [ ] Handle both individual file and folder exclusions
-  - [ ] Update sync file to reflect exclusion changes
-  - [ ] Add progress indicators for cleanup operations
+### Phase 4: Error Handling
+- [ ] Implement retry mechanisms
+- [ ] Add recovery procedures
+- [ ] Improve logging
+- [ ] Test error scenarios
+- [ ] Document error handling
 
-- [ ] Add exclusion change monitoring
-  - [ ] Monitor changes to exclusion settings
-  - [ ] Trigger cleanup when exclusions are modified
-  - [ ] Handle batch exclusions efficiently
-  - [ ] Add logging for exclusion-related operations
+### Phase 5: Performance
+- [ ] Optimize operations
+- [ ] Add monitoring
+- [ ] Implement cleanup
+- [ ] Test with large vaults
+- [ ] Document optimizations
 
-- [ ] Enhance file tracking for exclusions
-  - [ ] Update FileTracker to handle file moves to excluded folders
-  - [ ] Add detection of files becoming excluded
-  - [ ] Implement cleanup queue for excluded files
-  - [ ] Add retry mechanism for failed cleanup operations
-
-- [ ] Improve user feedback for exclusions
-  - [ ] Add notifications for exclusion-related changes
-  - [ ] Show progress during exclusion cleanup
-  - [ ] Display summary of excluded files
-  - [ ] Add confirmation for large exclusion operations
-
-## Medium Priority
-
-### 1. Performance Optimization
-- [ ] Implement batch processing for large vaults
-- [ ] Add progress indicators for sync operations
-- [ ] Add caching for frequently accessed data
-
-### 2. User Experience Improvements
-- [ ] Improve notifications - they are quite heavy currently
-- [ ] Add tooltips for settings
-- [ ] Create a settings migration system
-
-### 3. Testing
-- [ ] Add unit tests for core functionality
-- [ ] Implement integration tests
-- [ ] Create test data generator
-- [ ] Add performance benchmarks
+## Notes
+- All changes must maintain backward compatibility
+- Each phase should be tested thoroughly before proceeding
+- Documentation should be updated as changes are made
+- Performance metrics should be collected before and after changes
+- Error handling should be comprehensive and well-documented
