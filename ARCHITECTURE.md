@@ -11,9 +11,20 @@ The primary purpose of MindMatrix is to enable the creation of chatbots through 
 - **PostgreSQL Database**: Stores document metadata and relationships
 - **Tables**:
   - `obsidian_documents`: Stores document chunks with embeddings and metadata
-    - Fields: ID, vault_id, file_id, chunk_index, content, metadata (JSONB), embedding vector (1536d), timestamps
+    - Fields: ID, vault_id, file_status_id (foreign key), chunk_index, content, metadata (JSONB), embedding vector (1536d), timestamps
+    - Purpose: Handles all content-related matters of files
+    - Contains the actual document content and embeddings
+    - References obsidian_file_status for file location and status
   - `obsidian_file_status`: Tracks file vectorization status
     - Fields: ID, vault_id, file_path, modification_time, vectorization_time, content_hash, status, tags, aliases, links
+    - Purpose: Handles only file system concerns (name, location, status)
+    - Does not store any file content
+    - Acts as the source of truth for file existence and location
+- **Table Relationships**:
+  - `obsidian_documents` has a foreign key to `obsidian_file_status`
+  - One file status record can have multiple document chunks
+  - File status changes trigger document chunk updates
+  - Document content is always associated with a valid file status
 - **Functions**:
   - Semantic search function for matching document embeddings
   - `get_document_metadata`: Retrieves document metadata
