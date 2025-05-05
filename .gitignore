@@ -76,3 +76,5 @@ main.js
 
 # Local development
 .local/
+
+**/.claude/settings.local.json
