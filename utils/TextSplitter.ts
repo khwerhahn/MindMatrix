@@ -8,47 +8,43 @@ import { DEFAULT_CHUNKING_OPTIONS } from '../settings/Settings';
 import { MetadataExtractor } from '../services/MetadataExtractor';
 import { Vault, TFile } from 'obsidian';
 import { ErrorHandler } from './ErrorHandler';
-import { DebugSettings } from '../settings/Settings';
+
+export type ChunkingOptions = {
+        chunkSize: number;
+        chunkOverlap: number;
+        minChunkSize: number;
+};
 
 export class TextSplitter {
-	private settings: {
-		chunkSize: number;
-		chunkOverlap: number;
-		minChunkSize: number;
-	};
-	private metadataExtractor: MetadataExtractor;
-	// Regex patterns for splitting
-	private readonly SENTENCE_BOUNDARY = /[.!?]\s+/;
-	private readonly PARAGRAPH_BOUNDARY = /\n\s*\n/;
-	private readonly YAML_FRONT_MATTER = /^---\n([\s\S]*?)\n---/;
+        private settings: ChunkingOptions;
+        private metadataExtractor: MetadataExtractor;
+        // Regex patterns for splitting
+        private readonly SENTENCE_BOUNDARY = /[.!?]\s+/;
+        private readonly PARAGRAPH_BOUNDARY = /\n\s*\n/;
+        private readonly YAML_FRONT_MATTER = /^---\n([\s\S]*?)\n---/;
 
-	constructor(
-		private vault: Vault,
-		private errorHandler?: ErrorHandler,
-		private debug: boolean = false
-	) {
-		this.settings = { ...DEFAULT_CHUNKING_OPTIONS };
-		this.validateSettings(this.settings);
-		this.errorHandler = errorHandler || new ErrorHandler({
-			enableDebugLogs: debug,
-			logLevel: debug ? 'debug' : 'error',
-			logToFile: false
-		});
-		this.metadataExtractor = new MetadataExtractor(
-			this.vault,
-			this.errorHandler
-		);
-	}
+        constructor(
+                private vault: Vault,
+                private errorHandler: ErrorHandler,
+                chunkOptions: Partial<ChunkingOptions> = {}
+        ) {
+                this.settings = { ...DEFAULT_CHUNKING_OPTIONS, ...chunkOptions };
+                this.validateSettings(this.settings);
+                this.metadataExtractor = new MetadataExtractor(
+                        this.vault,
+                        this.errorHandler
+                );
+        }
 
-	/** Returns the current chunking settings. */
-	public getSettings(): { chunkSize: number; chunkOverlap: number; minChunkSize: number } {
-		return this.settings;
-	}
+        /** Returns the current chunking settings. */
+        public getSettings(): ChunkingOptions {
+                return this.settings;
+        }
 
-	private validateSettings(settings: { chunkSize: number; chunkOverlap: number; minChunkSize: number }): void {
-		if (settings.chunkSize <= 0) {
-			throw new Error('Chunk size must be greater than 0.');
-		}
+        private validateSettings(settings: ChunkingOptions): void {
+                if (settings.chunkSize <= 0) {
+                        throw new Error('Chunk size must be greater than 0.');
+                }
 		if (settings.chunkOverlap >= settings.chunkSize) {
 			throw new Error('Chunk overlap must be less than chunk size.');
 		}

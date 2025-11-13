@@ -1,11 +1,11 @@
 {
-  "id": "mind-matrix",
-  "name": "Mind Matrix",
+  "id": "obsidian-rag",
+  "name": "Obsidian RAG",
   "version": "1.0.0",
   "minAppVersion": "0.15.0",
-  "description": "Enhance your Obsidian experience by seamlessly syncing your notes with a Supabase vector database. Mind Matrix leverages AI-powered embeddings for semantic search, robust offline support, and cross-device coordination, ensuring your personal knowledge base is always accessible and intelligently organized.",
-  "author": "kwerhahn",
-  "authorUrl": "https://khw.io",
+  "description": "Enhance your Obsidian experience by seamlessly syncing your notes with a Supabase vector database. Obsidian RAG leverages AI-powered embeddings for semantic search, robust offline support, and cross-device coordination, ensuring your personal knowledge base is always accessible and intelligently organized.",
+  "author": "George Freeney Jr.",
+  "authorUrl": "https://smpl.ai",
   "fundingUrl": "",
   "isDesktopOnly": true,
   "main": "main.js"

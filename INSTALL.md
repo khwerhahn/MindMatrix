@@ -7,7 +7,8 @@
 Before you begin, ensure you have:
 - [Obsidian](https://obsidian.md/) installed
 - A [Supabase](https://supabase.com) account
-- An [OpenAI](https://platform.openai.com/) API key
+- Access to an [Ollama](https://ollama.com/) server (local or remote)
+- *(Optional)* An [OpenAI](https://platform.openai.com/) API key for fallback embeddings
 
 ### Installation Steps
 
@@ -16,14 +17,14 @@ Before you begin, ensure you have:
    #### Method 1: Through Obsidian (Recommended)
    - Open Obsidian Settings
    - Go to Community Plugins
-   - Search for "Mind Matrix"
+   - Search for "Obsidian RAG"
    - Click Install and Enable
 
    #### Method 2: Manual Installation
-   - Download the latest release from [GitHub Releases](https://github.com/yourusername/mindmatrix/releases)
+   - Download the latest release from [GitHub Releases](https://github.com/smpl-ai-automations/obsidian-rag/releases)
    - Extract the files to your vault's plugins directory:
      ```
-     .obsidian/plugins/mind-matrix/
+     .obsidian/plugins/obsidian-rag/
      ```
    - Restart Obsidian
    - Enable the plugin in Community Plugins settings
@@ -36,11 +37,14 @@ Before you begin, ensure you have:
    - Copy your Project URL
 
 3. **Configure the Plugin**
-   - Open Mind Matrix settings in Obsidian
+   - Open Obsidian RAG settings in Obsidian
    - Enter your Supabase credentials:
      - Project URL
      - Database Password
-   - Enter your OpenAI API key
+   - Configure the Embeddings section:
+     - Confirm the Ollama server URL and model (defaults to `http://localhost:11434` and `nomic-embed-text`)
+     - Enable or disable Ollama usage as needed
+     - (Optional) Provide an OpenAI API key to enable fallback embedding generation
    - Click "Initialize Database" to create the required tables
 
 4. **Start Using**
@@ -53,7 +57,7 @@ Before you begin, ensure you have:
 ### Prerequisites
 
 Before you begin, ensure you have the following installed:
-- [Node.js](https://nodejs.org/) (v16 or higher)
+- [Node.js](https://nodejs.org/) (v18 or higher)
 - [Yarn](https://yarnpkg.com/) package manager
 - [PostgreSQL](https://www.postgresql.org/) (v14 or higher)
 - [jq](https://stedolan.github.io/jq/) (for password encoding)
@@ -65,8 +69,8 @@ The inspiration for this plugin came from watching Nate Herk's YouTube video [St
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/mindmatrix.git
-   cd mindmatrix
+   git clone https://github.com/smpl-ai-automations/obsidian-rag.git
+   cd obsidian-rag
    ```
 
 2. **Install dependencies**
@@ -75,9 +79,9 @@ The inspiration for this plugin came from watching Nate Herk's YouTube video [St
    ```
 
 3. **Set up environment variables**
-   - Copy `.env.test` to `.env`:
+   - Copy `.env.template` to `.env`:
      ```bash
-     cp .env.test .env
+     cp .env.template .env
      ```
    - Update the `.env` file with your Supabase credentials:
      ```

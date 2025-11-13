@@ -3,16 +3,23 @@
 
 # Development commands
 dev:
-	@if ! command -v node &> /dev/null; then \
-		echo "❌ Error: Node.js is not installed" && \
-		echo "Please run 'make install-node' to install Node.js" && \
-		exit 1; \
-	fi && \
-	if ! command -v yarn &> /dev/null; then \
-		echo "❌ Error: Yarn is not installed" && \
-		echo "Please run 'make install-yarn' to install Yarn" && \
-		exit 1; \
-	fi && \
+@if ! command -v node &> /dev/null; then \
+echo "❌ Error: Node.js is not installed" && \
+echo "Please run 'make install-node' to install Node.js" && \
+exit 1; \
+fi && \
+NODE_VERSION=$$(node -v | sed 's/v//') && \
+NODE_MAJOR=$${NODE_VERSION%%.*} && \
+if [ $$NODE_MAJOR -lt 18 ]; then \
+echo "❌ Error: Node.js 18+ is required (found $$NODE_VERSION)" && \
+echo "Please upgrade Node.js before running development commands" && \
+exit 1; \
+fi && \
+if ! command -v yarn &> /dev/null; then \
+echo "❌ Error: Yarn is not installed" && \
+echo "Please run 'make install-yarn' to install Yarn" && \
+exit 1; \
+fi && \
 	yarn dev
 
 # Install Node.js
@@ -73,12 +80,12 @@ install-timeout:
 
 # Check environment setup
 check-env:
-	@if [ ! -f .env ]; then \
-		echo "📝 Creating .env file from template..." && \
-		cp .env.test .env && \
-		echo "✅ .env file created. Please update the values in .env" && \
-		exit 0; \
-	fi && \
+@if [ ! -f .env ]; then \
+echo "📝 Creating .env file from template..." && \
+cp .env.template .env && \
+echo "✅ .env file created. Please update the values in .env" && \
+exit 0; \
+fi && \
 	export $$(grep -v '^#' .env | xargs) && \
 	if [ -z "$$SUPABASE_URL" ] || [ -z "$$SUPABASE_DB_PASSWORD" ]; then \
 		echo "❌ Error: SUPABASE_URL or SUPABASE_DB_PASSWORD not set in .env" && \
@@ -108,11 +115,11 @@ setup-db:
 		echo "📦 Setting up database..." && \
 		timeout 30s psql "$$DB_URL" -f sql/setup.sql && \
 		echo "✅ Database setup complete!"; \
-	else \
-		echo "❌ Error: .env file not found" && \
-		echo "Please run 'make check-env' first" && \
-		exit 1; \
-	fi
+else \
+echo "❌ Error: .env file not found" && \
+echo "Please run 'make check-env' first (uses .env.template)" && \
+exit 1; \
+fi
 
 # Initialize project and database
 init: install-node install-yarn install-postgres install-jq install-timeout check-env
@@ -179,11 +186,11 @@ test-db:
 			fi; \
 			exit 1; \
 		}; \
-	else \
-		echo "❌ Error: .env file not found"; \
-		echo "Please create a .env file based on .env.test"; \
-		exit 1; \
-	fi
+else \
+echo "❌ Error: .env file not found"; \
+echo "Please create a .env file based on .env.template"; \
+exit 1; \
+fi
 
 # Reset database command - runs reset.sql followed by setup.sql
 reset:
@@ -216,10 +223,10 @@ reset:
 			fi; \
 			exit 1; \
 		}; \
-	else \
-		echo "Error: .env file not found. Please create one based on .env.test"; \
-		exit 1; \
-	fi
+else \
+echo "Error: .env file not found. Please create one based on .env.template"; \
+exit 1; \
+fi
 
 # Release targets
 .PHONY: release-major release-minor release-patch

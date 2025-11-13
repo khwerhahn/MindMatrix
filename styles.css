@@ -7,7 +7,7 @@ If your plugin does not need CSS, delete this file.
 
 */
 
-.mind-matrix-status-icon {
+.obsidian-rag-status-icon {
     display: inline-block;
     width: 16px;
     height: 16px;
@@ -17,20 +17,25 @@ If your plugin does not need CSS, delete this file.
     font-size: 12px;
 }
 
-.mind-matrix-status-icon.is-ready {
+.obsidian-rag-status-details {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.obsidian-rag-status-icon.is-ready {
     color: var(--color-green);
 }
 
-.mind-matrix-status-icon.is-error {
+.obsidian-rag-status-icon.is-error {
     color: var(--color-red);
 }
 
-.mind-matrix-status-icon.is-working {
+.obsidian-rag-status-icon.is-working {
     color: var(--color-yellow);
     animation: spin 2s linear infinite;
 }
 
-.mind-matrix-status-icon.is-initializing {
+.obsidian-rag-status-icon.is-initializing {
     color: var(--color-base-50);
 }
 

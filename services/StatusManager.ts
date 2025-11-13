@@ -64,7 +64,7 @@ export class StatusManager {
             this.notifySubscribers();
         }
         if (status === PluginStatus.ERROR && details.message) {
-            new Notice(`Mind Matrix: ${details.message}`);
+            new Notice(`Obsidian RAG: ${details.message}`);
         }
     }
 
@@ -98,7 +98,7 @@ export class StatusManager {
 
         // Create and append the status details text
         const detailsText = document.createElement('span');
-        detailsText.addClass('mind-matrix-status-details');
+        detailsText.addClass('obsidian-rag-status-details');
         let displayText = this.statusDetails.message;
         if (this.statusDetails.operation) {
             displayText += ` [${this.statusDetails.operation}]`;
@@ -137,7 +137,7 @@ export class StatusManager {
      */
     private createStatusIcon(): HTMLElement {
         const icon = document.createElement('span');
-        icon.addClass('mind-matrix-status-icon');
+        icon.addClass('obsidian-rag-status-icon');
         switch (this.currentStatus) {
             case PluginStatus.READY:
             case PluginStatus.COMPLETED:

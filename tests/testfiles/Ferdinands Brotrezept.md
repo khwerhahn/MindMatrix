@@ -11,7 +11,7 @@ tags: note
 **![](https://lh7-rt.googleusercontent.com/docsz/AD_4nXdiCrb3wqBGRxBDHRUbICFS6MVqypjXSwapj8oWew5B2QPzg-0TAXyZGSt0HflRI4pFjB66P_Tyb-3ZJhozHE0PENE_5uTz1fgiVPWtiFDsjH9Cb3Mp-pMds3-w9XHoQPSBYWKbuQ?key=dSXbumzRE37D6zQCsFnteqtg)
 # Zutaten
 
-- Maxium 500g Mehl  
+- Maximum 500g Mehl
   * 100g Weizenmehl Type 405  
   * Dinkel Vollkornmehl   
 - 1 gehäufter Esslöffel Sauerteig (ca. 40-50g)  

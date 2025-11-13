@@ -24,6 +24,7 @@ export interface DocumentMetadata {
     source?: string;
     file_id?: string;
     blobType?: string;
+    graphDocumentId?: string; // Optional ID used for graph synchronization
 }
 
 /**
@@ -51,7 +52,7 @@ export interface ChunkingOptions {
     // Minimum size of each chunk in characters
     minChunkSize: number;
     // Amount of overlap between chunks in characters
-    overlap: number;
+    chunkOverlap: number;
     // Whether to split on sentences when possible
     splitOnSentences: boolean;
     // Custom separator regex pattern (optional)
@@ -96,7 +97,7 @@ export enum DocumentProcessingError {
 export const DEFAULT_CHUNKING_OPTIONS: ChunkingOptions = {
     chunkSize: 1500,
     minChunkSize: 100,
-    overlap: 200,
+    chunkOverlap: 200,
     splitOnSentences: true,
     separator: /[.!?]\s+/
 };

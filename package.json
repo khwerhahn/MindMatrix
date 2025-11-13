@@ -1,7 +1,7 @@
 {
-  "name": "mind-matrix",
+  "name": "obsidian-rag",
   "version": "1.0.0",
-  "description": "Enhance your Obsidian experience by seamlessly syncing your notes with a Supabase vector database. Mind Matrix leverages AI-powered embeddings for semantic search, robust offline support, and cross-device coordination, ensuring your personal knowledge base is always accessible and intelligently organized.",
+  "description": "Enhance your Obsidian experience by seamlessly syncing your notes with a Supabase vector database. Obsidian RAG leverages AI-powered embeddings for semantic search, robust offline support, and cross-device coordination, ensuring your personal knowledge base is always accessible and intelligently organized.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -22,7 +22,7 @@
     "sync",
     "assistant"
   ],
-  "author": "khwerhahn",
+  "author": "George Freeney Jr. (SMPL: Ai Automations)",
   "license": "MIT",
   "packageManager": "yarn@4.6.0",
   "devDependencies": {
@@ -34,7 +34,7 @@
     "esbuild": "0.17.3",
     "jest": "^29.5.0",
     "obsidian": "latest",
-    "ts-jest": "^29.5.0",
+    "ts-jest": "^29.2.5",
     "tslib": "2.4.0",
     "typescript": "4.7.4"
   },
@@ -42,7 +42,9 @@
     "@supabase/supabase-js": "^2.39.0",
     "@types/uuid": "^9.0.0",
     "dotenv": "^16.3.1",
+    "neo4j-driver": "6.0.1",
     "openai": "^4.0.0",
+    "p-limit": "^4.0.0",
     "postgres": "^3.4.3",
     "uuid": "^9.0.0"
   }

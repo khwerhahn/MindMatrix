@@ -202,6 +202,59 @@ BEGIN
 END;
 $$;
 
+-- Function to atomically replace all chunks for a file inside a transaction
+CREATE OR REPLACE FUNCTION public.upsert_document_chunks(
+    p_vault_id TEXT,
+    p_file_status_id BIGINT,
+    p_chunks JSONB
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF p_chunks IS NULL OR jsonb_typeof(p_chunks) <> 'array' THEN
+        RETURN;
+    END IF;
+
+    DELETE FROM public.obsidian_documents
+    WHERE vault_id = p_vault_id
+      AND file_status_id = p_file_status_id;
+
+    INSERT INTO public.obsidian_documents (
+        vault_id,
+        file_status_id,
+        chunk_index,
+        content,
+        metadata,
+        embedding,
+        vectorized_at,
+        created_at,
+        updated_at
+    )
+    SELECT
+        p_vault_id,
+        p_file_status_id,
+        (chunk->>'chunk_index')::INT,
+        chunk->>'content',
+        chunk->'metadata',
+        CASE
+            WHEN chunk->'embedding' IS NULL
+                OR jsonb_typeof(chunk->'embedding') <> 'array'
+                OR jsonb_array_length(chunk->'embedding') = 0 THEN NULL
+            ELSE (
+                SELECT ARRAY_AGG(value::float4 ORDER BY ord)
+                FROM jsonb_array_elements_text(chunk->'embedding') WITH ORDINALITY AS emb(value, ord)
+            )::vector
+        END,
+        NULLIF(chunk->>'vectorized_at', '')::timestamptz,
+        NOW(),
+        COALESCE(NULLIF(chunk->>'updated_at', '')::timestamptz, NOW())
+    FROM jsonb_array_elements(p_chunks) AS chunk;
+END;
+$$;
+
 -------------------------------------------------
 -- Grant necessary permissions
 -------------------------------------------------

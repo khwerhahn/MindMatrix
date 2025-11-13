@@ -1,20 +1,26 @@
 // src/main.ts
 import { Plugin, TFile, Notice } from 'obsidian';
 import { SupabaseService } from './services/SupabaseService';
-import { OpenAIService } from './services/OpenAIService';
+import { EmbeddingService } from './services/EmbeddingService';
 import { QueueService } from './services/QueueService';
 import { FileTracker } from './utils/FileTracker';
 import { ErrorHandler } from './utils/ErrorHandler';
 import { NotificationManager } from './utils/NotificationManager';
-import { MindMatrixSettingsTab } from './settings/SettingsTab';
+import { ObsidianRAGSettingsTab } from './settings/SettingsTab';
 import { SyncFileManager } from './services/SyncFileManager';
 import { InitialSyncManager } from './services/InitialSyncManager';
 import { MetadataExtractor } from './services/MetadataExtractor';
 import { StatusManager, PluginStatus } from './services/StatusManager';
 import { SyncDetectionManager } from './services/SyncDetectionManager';
+import { Neo4jService } from './services/Neo4jService';
+import { EntityExtractor } from './services/EntityExtractor';
 import {
-	MindMatrixSettings,
+	ObsidianRAGSettings,
 	DEFAULT_SETTINGS,
+	DEFAULT_OPENAI_SETTINGS,
+	DEFAULT_OLLAMA_SETTINGS,
+	DEFAULT_NEO4J_SETTINGS,
+	DEFAULT_HYBRID_STRATEGY,
 	isVaultInitialized,
 	generateVaultId,
 	getAllExclusions,
@@ -22,11 +28,13 @@ import {
 } from './settings/Settings';
 import { ProcessingTask, TaskType, TaskStatus } from './models/ProcessingTask';
 
-export default class MindMatrixPlugin extends Plugin {
-	settings: MindMatrixSettings;
-	private supabaseService: SupabaseService | null = null;
-	private openAIService: OpenAIService | null = null;
-	private queueService: QueueService | null = null;
+export default class ObsidianRAGPlugin extends Plugin {
+	settings: ObsidianRAGSettings;
+        private supabaseService: SupabaseService | null = null;
+        private embeddingService: EmbeddingService | null = null;
+        private queueService: QueueService | null = null;
+        private neo4jService: Neo4jService | null = null;
+        private entityExtractor: EntityExtractor | null = null;
 	private fileTracker: FileTracker | null = null;
 	private errorHandler: ErrorHandler | null = null;
 	private notificationManager: NotificationManager | null = null;
@@ -39,14 +47,15 @@ export default class MindMatrixPlugin extends Plugin {
 	private metadataExtractor: MetadataExtractor | null = null;
 	private statusManager: StatusManager | null = null;
 	private syncDetectionManager: SyncDetectionManager | null = null;
+	private eventsRegistered = false;
 
 	async onload() {
-		console.log('Loading Mind Matrix Plugin...');
+		console.log('Loading Obsidian RAG Plugin...');
 		try {
 			// Initialize status manager first
 			this.statusManager = new StatusManager(this.addStatusBarItem());
 			this.statusManager.setStatus(PluginStatus.INITIALIZING, {
-				message: 'Loading Mind Matrix Plugin...'
+				message: 'Loading Obsidian RAG Plugin...'
 			});
 
 			// Load settings
@@ -67,7 +76,7 @@ export default class MindMatrixPlugin extends Plugin {
 			this.registerEventHandlers();
 
 			// Add settings tab
-			this.addSettingTab(new MindMatrixSettingsTab(this.app, this));
+			this.addSettingTab(new ObsidianRAGSettingsTab(this.app, this));
 
 			if (isVaultInitialized(this.settings)) {
 				this.statusManager.setStatus(PluginStatus.WAITING_FOR_SYNC, {
@@ -84,7 +93,7 @@ export default class MindMatrixPlugin extends Plugin {
 				await this.completeInitialization();
 			}
 		} catch (error) {
-			console.error('Failed to initialize Mind Matrix Plugin:', error);
+			console.error('Failed to initialize Obsidian RAG Plugin:', error);
 			this.statusManager?.setStatus(PluginStatus.ERROR, {
 				message: 'Failed to initialize plugin. Check console for details.',
 				error: error as Error
@@ -104,7 +113,7 @@ export default class MindMatrixPlugin extends Plugin {
 					// Perform a quick integrity check with the database
 					const fileCount = await this.supabaseService.getFileCount();
 					if (fileCount > 0) {
-						console.log('[MindMatrix] Database contains files, skipping initial sync');
+						console.log('[ObsidianRAG] Database contains files, skipping initial sync');
 						await this.completeInitialization();
 						return;
 					}
@@ -136,7 +145,7 @@ export default class MindMatrixPlugin extends Plugin {
 
 			// Ensure FileTracker is initialized before registering event handlers
 			if (!this.fileTracker?.getInitializationStatus()) {
-				console.warn('[MindMatrix] FileTracker not initialized. Waiting for initialization...');
+				console.warn('[ObsidianRAG] FileTracker not initialized. Waiting for initialization...');
 				await new Promise<void>((resolve) => {
 					const checkInterval = setInterval(() => {
 						if (this.fileTracker?.getInitializationStatus()) {
@@ -152,13 +161,12 @@ export default class MindMatrixPlugin extends Plugin {
 				});
 			}
 
-			// Register event handlers and commands
-			this.registerEventHandlers();
+			// Register commands after services are ready
 			this.addCommands();
 			
 			// Update status to ready
 			this.statusManager?.setStatus(PluginStatus.READY, {
-				message: 'Mind Matrix is ready'
+				message: 'Obsidian RAG is ready'
 			});
 		} catch (error) {
 			console.error('Error completing initialization:', error);
@@ -170,7 +178,7 @@ export default class MindMatrixPlugin extends Plugin {
 	}
 
 	async onunload() {
-		console.log('Unloading Mind Matrix Plugin...');
+		console.log('Unloading Obsidian RAG Plugin...');
 		// Stop sync detection and clear any intervals/timeouts
 		this.syncDetectionManager?.stopMonitoring();
 		if (this.initializationTimeout) clearTimeout(this.initializationTimeout);
@@ -178,6 +186,7 @@ export default class MindMatrixPlugin extends Plugin {
 		this.queueService?.stop();
 		this.notificationManager?.clear();
 		this.initialSyncManager?.stop();
+		this.eventsRegistered = false;
 	}
 
 	private async startSyncProcess(): Promise<void> {
@@ -267,29 +276,83 @@ export default class MindMatrixPlugin extends Plugin {
 		this.statusManager?.setStatus(PluginStatus.INITIALIZING, { message: 'Core services initialized' });
 	}
 
-	private async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-		// Ensure exclusions have the expected structure
-		if (!this.settings.exclusions) this.settings.exclusions = { ...DEFAULT_SETTINGS.exclusions };
-		if (!this.settings.exclusions.excludedFolders) this.settings.exclusions.excludedFolders = [];
-		if (!this.settings.exclusions.excludedFileTypes) this.settings.exclusions.excludedFileTypes = [];
-		if (!this.settings.exclusions.excludedFilePrefixes) this.settings.exclusions.excludedFilePrefixes = [];
+        private async loadSettings() {
+                const storedSettings = await this.loadData();
+                this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings);
+
+                if (!this.settings.neo4j) {
+                        this.settings.neo4j = { ...DEFAULT_NEO4J_SETTINGS };
+                } else {
+                        this.settings.neo4j = { ...DEFAULT_NEO4J_SETTINGS, ...this.settings.neo4j };
+                }
+
+                // Ensure embedding settings exist and merge defaults
+                if (!this.settings.embeddings) {
+                        const legacyOpenAI = storedSettings?.openai || this.settings.openai;
+                        this.settings.embeddings = {
+                                ollama: { ...DEFAULT_OLLAMA_SETTINGS },
+                                openai: {
+                                        ...DEFAULT_OPENAI_SETTINGS,
+                                        ...(legacyOpenAI || {}),
+                                },
+                        };
+                } else {
+                        this.settings.embeddings.ollama = {
+                                ...DEFAULT_OLLAMA_SETTINGS,
+                                ...(this.settings.embeddings.ollama || {}),
+                        };
+                        this.settings.embeddings.openai = {
+                                ...DEFAULT_OPENAI_SETTINGS,
+                                ...(this.settings.embeddings.openai || {}),
+                        };
+                }
+
+                // Maintain deprecated openai field for backwards compatibility
+                this.settings.openai = {
+                        ...DEFAULT_OPENAI_SETTINGS,
+                        ...(this.settings.openai || {}),
+                        ...this.settings.embeddings.openai,
+                };
+                this.settings.embeddings.openai = { ...this.settings.openai };
+
+                // Ensure exclusions have the expected structure
+                if (!this.settings.exclusions) this.settings.exclusions = { ...DEFAULT_SETTINGS.exclusions };
+                if (!this.settings.exclusions.excludedFolders) this.settings.exclusions.excludedFolders = [];
+                if (!this.settings.exclusions.excludedFileTypes) this.settings.exclusions.excludedFileTypes = [];
+                if (!this.settings.exclusions.excludedFilePrefixes) this.settings.exclusions.excludedFilePrefixes = [];
 		if (!this.settings.exclusions.excludedFiles) this.settings.exclusions.excludedFiles = [];
 		if (!this.settings.exclusions.systemExcludedFolders) this.settings.exclusions.systemExcludedFolders = [...SYSTEM_EXCLUSIONS.folders];
 		if (!this.settings.exclusions.systemExcludedFileTypes) this.settings.exclusions.systemExcludedFileTypes = [...SYSTEM_EXCLUSIONS.fileTypes];
 		if (!this.settings.exclusions.systemExcludedFilePrefixes) this.settings.exclusions.systemExcludedFilePrefixes = [...SYSTEM_EXCLUSIONS.filePrefixes];
-		if (!this.settings.exclusions.systemExcludedFiles) this.settings.exclusions.systemExcludedFiles = [...SYSTEM_EXCLUSIONS.files];
-	}
+                if (!this.settings.exclusions.systemExcludedFiles) this.settings.exclusions.systemExcludedFiles = [...SYSTEM_EXCLUSIONS.files];
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-		// Update service settings after saving
-		this.notificationManager?.updateSettings(this.settings.enableNotifications, this.settings.enableProgressBar);
-		this.errorHandler?.updateSettings(this.settings.debug);
-		if (isVaultInitialized(this.settings)) await this.initializeServices();
-	}
+		if (!this.settings.sync.mode) {
+			this.settings.sync.mode = 'supabase';
+		}
 
-	private startPeriodicSyncChecks(): void {
+		if (!this.settings.sync.hybridStrategy) {
+			this.settings.sync.hybridStrategy = { ...DEFAULT_HYBRID_STRATEGY };
+		} else {
+			this.settings.sync.hybridStrategy = {
+				...DEFAULT_HYBRID_STRATEGY,
+				...this.settings.sync.hybridStrategy
+			};
+		}
+}
+
+		async saveSettings() {
+			this.settings.openai = { ...this.settings.embeddings.openai };
+			await this.saveData(this.settings);
+			// Update service settings after saving
+			this.notificationManager?.updateSettings(this.settings.enableNotifications, this.settings.enableProgressBar);
+			this.errorHandler?.updateSettings(this.settings.debug);
+			this.embeddingService?.updateSettings(this.settings.embeddings);
+			this.entityExtractor?.updateSettings(this.settings.embeddings, this.settings.neo4j.projectName);
+			this.queueService?.updateHybridPreferences(this.settings.sync.hybridStrategy, this.settings.sync.mode);
+			if (isVaultInitialized(this.settings)) await this.initializeServices();
+		}
+
+		private startPeriodicSyncChecks(): void {
 		if (this.syncCheckInterval) clearInterval(this.syncCheckInterval);
 		this.syncCheckInterval = setInterval(async () => {
 			await this.performSyncCheck();
@@ -342,61 +405,91 @@ export default class MindMatrixPlugin extends Plugin {
 		}
 	}
 
-	private async initializeServices(): Promise<void> {
-		console.log('[MindMatrix] Initializing services...', {
-			hasVault: !!this.app.vault,
-			hasErrorHandler: !!this.errorHandler
-		});
+        private async initializeServices(): Promise<void> {
+                console.log('[ObsidianRAG] Initializing services...', {
+                        hasVault: !!this.app.vault,
+                        hasErrorHandler: !!this.errorHandler
+                });
 
-		if (!this.errorHandler) {
-			throw new Error('Error handler must be initialized before services');
-		}
+                if (!this.errorHandler) {
+                        throw new Error('Error handler must be initialized before services');
+                }
 
-		try {
-			// Initialize Supabase service first
-			this.supabaseService = await SupabaseService.getInstance(this.settings);
-			if (!this.supabaseService) {
-				throw new Error('Failed to initialize Supabase service');
-			}
-			console.log('[MindMatrix] Supabase service initialized.');
+                const useSupabase = this.shouldUseSupabase();
+                const useNeo4j = this.shouldUseNeo4j();
 
-			// Initialize OpenAI service
-			this.openAIService = new OpenAIService(this.settings.openai, this.errorHandler);
-			console.log('[MindMatrix] OpenAI service initialized.');
+                try {
+                        if (useSupabase) {
+                                this.supabaseService = await SupabaseService.getInstance(this.settings);
+                                if (!this.supabaseService) {
+                                        throw new Error('Failed to initialize Supabase service');
+                                }
+                                console.log('[ObsidianRAG] Supabase service initialized.');
+                        } else {
+                                this.supabaseService = null;
+                        }
 
-			// Initialize QueueService
-			const notificationManager = this.notificationManager || new NotificationManager(
-				this.addStatusBarItem(),
-				this.settings.enableNotifications,
-				this.settings.enableProgressBar
-			);
+                        if (useNeo4j) {
+                                this.neo4jService = await Neo4jService.getInstance(this.settings);
+                                if (!this.neo4jService) {
+                                        throw new Error('Failed to initialize Neo4j service');
+                                }
+                                console.log('[ObsidianRAG] Neo4j service initialized.');
+                        } else {
+                                this.neo4jService = null;
+                        }
+
+                        this.embeddingService = useSupabase
+                                ? new EmbeddingService(this.settings.embeddings, this.errorHandler)
+                                : null;
+                        if (this.embeddingService) {
+                                console.log('[ObsidianRAG] Embedding service initialized.');
+                        }
+
+                        this.entityExtractor = useNeo4j
+                                ? new EntityExtractor(this.settings.embeddings, this.errorHandler, this.settings.neo4j.projectName)
+                                : null;
+
+                        const notificationManager = this.notificationManager || new NotificationManager(
+                                this.addStatusBarItem(),
+                                this.settings.enableNotifications,
+                                this.settings.enableProgressBar
+                        );
 
 			this.queueService = new QueueService(
 				this.settings.queue.maxConcurrent,
 				this.settings.queue.retryAttempts,
 				this.supabaseService,
-				this.openAIService,
+				this.embeddingService,
 				this.errorHandler,
 				notificationManager,
 				this.app.vault,
-				this.settings.chunking
+				this.settings.chunking,
+				{
+					vectorSyncEnabled: useSupabase,
+					graphSyncEnabled: useNeo4j,
+					neo4jService: this.neo4jService,
+					entityExtractor: this.entityExtractor,
+					hybridStrategy: this.settings.sync.hybridStrategy,
+					syncMode: this.settings.sync.mode,
+				}
 			);
-			await this.queueService.start();
-			console.log('[MindMatrix] Queue service initialized and started.');
+                        await this.queueService.start();
+                        console.log('[ObsidianRAG] Queue service initialized and started.');
 
-			// Initialize FileTracker
-			this.fileTracker = new FileTracker(
-				this.app.vault,
-				this.errorHandler,
-				this.settings.sync.syncFilePath,
-				this.supabaseService
-			);
-			await this.fileTracker.initialize(this.settings, this.supabaseService, this.queueService);
-			console.log('[MindMatrix] FileTracker initialized.');
+                        // Initialize FileTracker
+                        this.fileTracker = new FileTracker(
+                                this.app.vault,
+                                this.errorHandler,
+                                this.settings.sync.syncFilePath,
+                                this.supabaseService
+                        );
+                        await this.fileTracker.initialize(this.settings, this.supabaseService, this.queueService);
+                        console.log('[ObsidianRAG] FileTracker initialized.');
 
 			// Initialize MetadataExtractor
 			this.metadataExtractor = new MetadataExtractor(this.app.vault, this.errorHandler);
-			console.log('[MindMatrix] MetadataExtractor initialized.');
+			console.log('[ObsidianRAG] MetadataExtractor initialized.');
 
 			// Initialize InitialSyncManager
 			if (!this.syncManager) {
@@ -414,14 +507,15 @@ export default class MindMatrixPlugin extends Plugin {
 			if (!this.notificationManager) {
 				throw new Error('NotificationManager must be initialized before InitialSyncManager');
 			}
-			this.initialSyncManager = new InitialSyncManager(
-				this.app.vault,
-				this.queueService,
-				this.syncManager,
-				this.metadataExtractor,
-				this.errorHandler,
-				this.notificationManager,
-				this.supabaseService,
+                        this.initialSyncManager = new InitialSyncManager(
+                                this.app.vault,
+                                this.queueService,
+                                this.embeddingService,
+                                this.syncManager,
+                                this.metadataExtractor,
+                                this.errorHandler,
+                                this.notificationManager,
+                                this.supabaseService,
 				{
 					batchSize: this.settings.initialSync.batchSize || 50,
 					maxConcurrentBatches: this.settings.initialSync.maxConcurrentBatches || 3,
@@ -436,24 +530,40 @@ export default class MindMatrixPlugin extends Plugin {
 					}
 				}
 			);
-			console.log('[MindMatrix] InitialSyncManager initialized.');
+			console.log('[ObsidianRAG] InitialSyncManager initialized.');
 		} catch (error) {
-			console.error('[MindMatrix] Error initializing services:', error);
-			this.errorHandler.handleError(error, { context: 'MindMatrixPlugin.initializeServices' });
+			console.error('[ObsidianRAG] Error initializing services:', error);
+			this.errorHandler.handleError(error, { context: 'ObsidianRAGPlugin.initializeServices' });
 			throw error;
 		}
 	}
 
 	private checkRequiredConfigurations(): void {
-		if (!this.settings.openai.apiKey) {
-			new Notice('OpenAI API key is missing. AI features are disabled. Configure it in the settings.');
-		}
-		if (!this.settings.supabase.url || !this.settings.supabase.apiKey) {
-			new Notice('Supabase configuration is incomplete. Database features are disabled. Configure it in the settings.');
-		}
-	}
+                const hasOllama = this.settings.embeddings?.ollama?.enabled;
+                const hasOpenAIApiKey = !!this.settings.embeddings?.openai?.apiKey;
+                const shouldFallbackToOpenAI = this.settings.embeddings?.ollama?.fallbackToOpenAI;
+
+                if (!hasOllama && !hasOpenAIApiKey) {
+                        new Notice('No embedding provider configured. Enable Ollama or provide an OpenAI API key.');
+                } else if (shouldFallbackToOpenAI && !hasOpenAIApiKey) {
+                        new Notice('OpenAI fallback is enabled but the API key is missing. Configure it in the settings.');
+                }
+                const requiresSupabase = this.shouldUseSupabase();
+                const requiresNeo4j = this.shouldUseNeo4j();
+                if (requiresSupabase && (!this.settings.supabase.url || !this.settings.supabase.apiKey)) {
+                        new Notice('Supabase configuration is incomplete. Database features are disabled. Configure it in the settings.');
+                }
+                if (requiresNeo4j && (!this.settings.neo4j.url || !this.settings.neo4j.username || !this.settings.neo4j.password)) {
+                        new Notice('Neo4j configuration is incomplete. Graph features are disabled until credentials are provided.');
+                }
+        }
 
 	private registerEventHandlers() {
+		if (this.eventsRegistered) {
+			console.log('[ObsidianRAG] Event handlers already registered, skipping.');
+			return;
+		}
+		this.eventsRegistered = true;
 		// Enhanced file event handlers with improved debouncing and logging
 
 		this.registerEvent(
@@ -517,9 +627,9 @@ export default class MindMatrixPlugin extends Plugin {
 		);
 	}
 
-	private shouldProcessFile(file: TFile): boolean {
-		if (!this.queueService || !isVaultInitialized(this.settings)) return false;
-		if (!this.settings.enableAutoSync) return false;
+        private shouldProcessFile(file: TFile): boolean {
+                if (!this.queueService || !isVaultInitialized(this.settings)) return false;
+                if (!this.settings.enableAutoSync) return false;
 
 		const allExclusions = getAllExclusions(this.settings);
 		const filePath = file.path;
@@ -560,11 +670,11 @@ export default class MindMatrixPlugin extends Plugin {
 		return true;
 	}
 
-	private async ensureSyncFileExists(): Promise<boolean> {
-		if (!this.syncManager) {
-			console.error('Sync manager not initialized');
-			return false;
-		}
+        private async ensureSyncFileExists(): Promise<boolean> {
+                if (!this.syncManager) {
+                        console.error('Sync manager not initialized');
+                        return false;
+                }
 		try {
 			const syncFile = this.app.vault.getAbstractFileByPath(this.settings.sync.syncFilePath);
 			if (!syncFile) {
@@ -580,7 +690,7 @@ export default class MindMatrixPlugin extends Plugin {
 		}
 	}
 
-	private async queueFileProcessing(file: TFile, type: TaskType.CREATE | TaskType.UPDATE | TaskType.DELETE): Promise<void> {
+        private async queueFileProcessing(file: TFile, type: TaskType.CREATE | TaskType.UPDATE | TaskType.DELETE): Promise<void> {
 		try {
 			if (!this.queueService || !this.fileTracker) {
 				console.error('Required services not initialized:', { queueService: !!this.queueService, fileTracker: !!this.fileTracker });
@@ -613,8 +723,18 @@ export default class MindMatrixPlugin extends Plugin {
 			this.errorHandler?.handleError(error, { context: 'queueFileProcessing', metadata: { filePath: file.path, type } });
 			if (this.settings.enableNotifications) {
 				new Notice(`Failed to queue ${file.name} for processing`);
-			}
-		}
+        }
+
+        private shouldUseSupabase(): boolean {
+                const mode = this.settings.sync.mode || 'supabase';
+                return mode === 'supabase' || mode === 'hybrid';
+        }
+
+        private shouldUseNeo4j(): boolean {
+                const mode = this.settings.sync.mode || 'supabase';
+                return mode === 'neo4j' || mode === 'hybrid';
+        }
+}
 	}
 
 	private addCommands() {

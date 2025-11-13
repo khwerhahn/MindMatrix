@@ -6,7 +6,7 @@ import { SyncFileManager } from '@/services/SyncFileManager';
 import { SupabaseService } from '@/services/SupabaseService';
 // Optional: Import OfflineQueueManager if available
 import { OfflineQueueManager } from '@/services/OfflineQueueManager';
-import { MindMatrixSettings } from '@/settings/Settings';
+import { ObsidianRAGSettings } from '@/settings/Settings';
 import { QueueService } from '@/services/QueueService';
 import { ProcessingTask, TaskType, TaskStatus } from '@/models/ProcessingTask';
 
@@ -45,7 +45,7 @@ export class FileTracker {
 		excludedFiles: []
 	};
 	private vaultId: string | null = null;
-	private settings: MindMatrixSettings | null = null;
+	private settings: ObsidianRAGSettings | null = null;
 	private isInitialized: boolean = false;
 	private pendingChanges: FileEvent[] = [];
 	private recentChanges: Map<string, RecentChange> = new Map();
@@ -62,7 +62,7 @@ export class FileTracker {
 	constructor(
 		private vault: Vault,
 		private errorHandler: ErrorHandler,
-		syncFilePath: string = '_mindmatrixsync.md',
+		syncFilePath: string = '_obsidianragsync.md',
 		private supabaseService: SupabaseService | null = null,
 		offlineQueueManager?: OfflineQueueManager
 	) {
@@ -86,14 +86,14 @@ export class FileTracker {
 	 * Initialize the file tracker.
 	 * If a Supabase service is available, reconcile the database with the local sync file.
 	 */
-	public async initialize(settings: MindMatrixSettings, supabaseService: SupabaseService, queueService: QueueService): Promise<void> {
-		console.log('[FileTracker.initialize] Starting FileTracker initialization');
-		this.settings = settings;
-		this.supabaseService = supabaseService;
-		this.queueService = queueService;
+        public async initialize(settings: ObsidianRAGSettings, supabaseService: SupabaseService | null, queueService: QueueService): Promise<void> {
+                console.log('[FileTracker.initialize] Starting FileTracker initialization');
+                this.settings = settings;
+                this.supabaseService = supabaseService;
+                this.queueService = queueService;
 
 		// Get sync file path
-		const syncFilePath = this.settings.sync.syncFilePath || '_mindmatrixsync.md';
+		const syncFilePath = this.settings.sync.syncFilePath || '_obsidianragsync.md';
 		console.log('[FileTracker.initialize] Sync file path:', syncFilePath);
 
 		// Initialize sync file manager
@@ -116,7 +116,7 @@ export class FileTracker {
 			const files = this.vault.getMarkdownFiles();
 			for (const file of files) {
 				if (!this.shouldTrackFile(file.path)) {
-					console.log(`[MindMatrix] Skipping file with excluded prefix: ${file.path}`);
+					console.log(`[ObsidianRAG] Skipping file with excluded prefix: ${file.path}`);
 					continue;
 				}
 				// Queue the file for processing
@@ -143,7 +143,7 @@ export class FileTracker {
 
 	private async queueFileForProcessing(file: TFile): Promise<void> {
 		if (!this.settings || !this.supabaseService || !this.queueService) {
-			console.warn('[MindMatrix] Services not properly initialized. Skipping file processing.');
+			console.warn('[ObsidianRAG] Services not properly initialized. Skipping file processing.');
 			return;
 		}
 
@@ -151,7 +151,7 @@ export class FileTracker {
 			// Get file metadata
 			const metadata = await this.createFileMetadata(file);
 			if (!metadata) {
-				console.warn(`[MindMatrix] Failed to extract metadata for file: ${file.path}`);
+				console.warn(`[ObsidianRAG] Failed to extract metadata for file: ${file.path}`);
 				return;
 			}
 
@@ -171,9 +171,9 @@ export class FileTracker {
 
 			// Add to queue
 			await this.queueService.addTask(task);
-			console.log(`[MindMatrix] Queued file for processing: ${file.path}`);
+			console.log(`[ObsidianRAG] Queued file for processing: ${file.path}`);
 		} catch (error) {
-			console.error(`[MindMatrix] Error queueing file for processing: ${file.path}`, error);
+			console.error(`[ObsidianRAG] Error queueing file for processing: ${file.path}`, error);
 		}
 	}
 
@@ -197,10 +197,13 @@ export class FileTracker {
 		this.pendingChanges = [];
 	}
 
-	/**
-	 * Reconcile database records with local sync file entries.
-	 * Ensures that each file in the vault has an up-to-date status in the database.
-	 */
+        /**
+         * Reconcile database records with local sync file entries.
+         * Ensures that each file in the vault has an up-to-date status in the database.
+         * When a change is detected the Supabase record is explicitly marked as `pending`
+         * so downstream processors (QueueService) know to re-vectorize the file before
+         * eventually transitioning it back to `vectorized`.
+         */
 	private async reconcileDatabaseWithSyncFile(): Promise<void> {
 		try {
 			if (!this.supabaseService) return;
@@ -216,20 +219,20 @@ export class FileTracker {
 					// Get file status from the database
 					const dbStatus = await this.supabaseService.getFileVectorizationStatus(file.path);
 					const currentHash = await this.calculateFileHash(file);
-					// If the file is marked as vectorized but the file has changed, update status to PENDING
-					if (dbStatus.isVectorized) {
-						const fileModifiedSinceDb = file.stat.mtime > (dbStatus.lastModified || 0);
-						if (fileModifiedSinceDb) {
-							const metadata = await this.createFileMetadata(file);
-							await this.supabaseService.updateFileVectorizationStatus(metadata);
-							console.log(`Database record updated to PENDING for modified file: ${file.path}`);
-						}
-					} else {
-						// No valid record or not vectorized yet—create or update it in the database
-						const metadata = await this.createFileMetadata(file);
-						await this.supabaseService.updateFileVectorizationStatus(metadata);
-						console.log(`Database record created/updated for file: ${file.path}`);
-					}
+                                        // If the file is marked as vectorized but the file has changed, update status to PENDING
+                                        if (dbStatus.isVectorized) {
+                                                const fileModifiedSinceDb = file.stat.mtime > (dbStatus.lastModified || 0);
+                                                if (fileModifiedSinceDb) {
+                                                        const metadata = await this.createFileMetadata(file);
+                                                        await this.supabaseService.updateFileVectorizationStatus(metadata, 'pending');
+                                                        console.log(`Database record updated to PENDING for modified file: ${file.path}`);
+                                                }
+                                        } else {
+                                                // No valid record or not vectorized yet—create or update it in the database
+                                                const metadata = await this.createFileMetadata(file);
+                                                await this.supabaseService.updateFileVectorizationStatus(metadata, 'pending');
+                                                console.log(`Database record created/updated for file: ${file.path}`);
+                                        }
 				} catch (error) {
 					this.errorHandler.handleError(error, {
 						context: 'FileTracker.reconcileDatabaseWithSyncFile',
@@ -257,7 +260,7 @@ export class FileTracker {
 		const event: FileEvent = { type: 'create', file, timestamp: Date.now() };
 		if (!this.isInitialized) {
 			this.preInitQueue.push(event);
-			console.log(`[MindMatrix] Queued create event for later processing: ${file.path}`);
+			console.log(`[ObsidianRAG] Queued create event for later processing: ${file.path}`);
 			return;
 		}
 		await this.queueEvent(event);
@@ -272,7 +275,7 @@ export class FileTracker {
 		const event: FileEvent = { type: 'modify', file, timestamp: Date.now() };
 		if (!this.isInitialized) {
 			this.preInitQueue.push(event);
-			console.log(`[MindMatrix] Queued modify event for later processing: ${file.path}`);
+			console.log(`[ObsidianRAG] Queued modify event for later processing: ${file.path}`);
 			return;
 		}
 		await this.queueEvent(event);
@@ -283,7 +286,7 @@ export class FileTracker {
 		const event: FileEvent = { type: 'delete', file, timestamp: Date.now() };
 		if (!this.isInitialized) {
 			this.preInitQueue.push(event);
-			console.log(`[MindMatrix] Queued delete event for later processing: ${file.path}`);
+			console.log(`[ObsidianRAG] Queued delete event for later processing: ${file.path}`);
 			return;
 		}
 		await this.queueEvent(event);
@@ -291,75 +294,75 @@ export class FileTracker {
 
 	async handleRename(file: TFile, oldPath: string): Promise<void> {
 		if (!this.supabaseService || !this.settings?.vaultId) {
-			console.warn('[MindMatrix] SupabaseService not initialized');
+			console.warn('[ObsidianRAG] SupabaseService not initialized');
 			return;
 		}
 
-		console.log(`[MindMatrix] Starting file rename process: ${oldPath} -> ${file.path}`);
+		console.log(`[ObsidianRAG] Starting file rename process: ${oldPath} -> ${file.path}`);
 
 		try {
 			// Get the current file status before making any changes
-			console.log(`[MindMatrix] Checking old file status for: ${oldPath}`);
+			console.log(`[ObsidianRAG] Checking old file status for: ${oldPath}`);
 			const oldFileStatus = await this.supabaseService.getFileStatus(oldPath);
 			if (!oldFileStatus) {
-				console.log(`[MindMatrix] No file status found for ${oldPath}, treating as new file`);
+				console.log(`[ObsidianRAG] No file status found for ${oldPath}, treating as new file`);
 				await this.processFile(file);
 				return;
 			}
-			console.log(`[MindMatrix] Found existing file status with ID: ${oldFileStatus.id}`);
+			console.log(`[ObsidianRAG] Found existing file status with ID: ${oldFileStatus.id}`);
 
 			// Add a small delay to allow the file system to stabilize
-			console.log(`[MindMatrix] Waiting for file system to stabilize...`);
+			console.log(`[ObsidianRAG] Waiting for file system to stabilize...`);
 			await new Promise(resolve => setTimeout(resolve, 100));
 
 			// Check if there's already a record at the new path
-			console.log(`[MindMatrix] Checking for existing record at new path: ${file.path}`);
+			console.log(`[ObsidianRAG] Checking for existing record at new path: ${file.path}`);
 			let newFileStatus: FileStatusRecord | null = null;
 			try {
 				newFileStatus = await this.supabaseService.getFileStatus(file.path);
 				if (newFileStatus) {
-					console.log(`[MindMatrix] Found existing record at new path with ID: ${newFileStatus.id}`);
+					console.log(`[ObsidianRAG] Found existing record at new path with ID: ${newFileStatus.id}`);
 				}
 			} catch (error) {
 				if (error instanceof Error && error.message?.includes('406')) {
-					console.log(`[MindMatrix] 406 error when checking new path, treating as no existing record`);
+					console.log(`[ObsidianRAG] 406 error when checking new path, treating as no existing record`);
 				} else {
-					console.error(`[MindMatrix] Error checking new path:`, error);
+					console.error(`[ObsidianRAG] Error checking new path:`, error);
 					throw error;
 				}
 			}
 
 			// Calculate new hash to check if content changed
-			console.log(`[MindMatrix] Calculating new file hash...`);
+			console.log(`[ObsidianRAG] Calculating new file hash...`);
 			const newHash = await this.calculateFileHash(file);
 			const contentChanged = newHash !== oldFileStatus.content_hash;
-			console.log(`[MindMatrix] Content changed during move: ${contentChanged}`);
+			console.log(`[ObsidianRAG] Content changed during move: ${contentChanged}`);
 
 			if (newFileStatus) {
 				// If a record exists at the new path, we need to handle this conflict
-				console.log(`[MindMatrix] Handling file status conflict at new path ${file.path}`);
+				console.log(`[ObsidianRAG] Handling file status conflict at new path ${file.path}`);
 				try {
 					// First delete the old record's chunks and wait for completion
-					console.log(`[MindMatrix] Deleting old chunks for file status ID: ${oldFileStatus.id}`);
+					console.log(`[ObsidianRAG] Deleting old chunks for file status ID: ${oldFileStatus.id}`);
 					await this.supabaseService.deleteDocumentChunks(oldFileStatus.id);
 					
 					// Then delete the existing record's chunks at the new path
-					console.log(`[MindMatrix] Deleting existing chunks at new path for file status ID: ${newFileStatus.id}`);
+					console.log(`[ObsidianRAG] Deleting existing chunks at new path for file status ID: ${newFileStatus.id}`);
 					await this.supabaseService.deleteDocumentChunks(newFileStatus.id);
 					
 					// Delete the old file status
-					console.log(`[MindMatrix] Purging old file status record ID: ${oldFileStatus.id}`);
+					console.log(`[ObsidianRAG] Purging old file status record ID: ${oldFileStatus.id}`);
 					await this.supabaseService.purgeFileStatus(oldFileStatus.id);
 					
 					// Delete the existing file status at the new path
-					console.log(`[MindMatrix] Purging existing file status at new path ID: ${newFileStatus.id}`);
+					console.log(`[ObsidianRAG] Purging existing file status at new path ID: ${newFileStatus.id}`);
 					await this.supabaseService.purgeFileStatus(newFileStatus.id);
 					
 					// Finally, process the file as new
-					console.log(`[MindMatrix] Processing file as new after conflict resolution`);
+					console.log(`[ObsidianRAG] Processing file as new after conflict resolution`);
 					await this.processFile(file);
 				} catch (error) {
-					console.error(`[MindMatrix] Error handling file status conflict for ${file.path}:`, error);
+					console.error(`[ObsidianRAG] Error handling file status conflict for ${file.path}:`, error);
 					throw error;
 				}
 				return;
@@ -367,29 +370,29 @@ export class FileTracker {
 
 			if (!contentChanged) {
 				// If only the path changed, just update the path in the database
-				console.log(`[MindMatrix] Only path changed, updating database record`);
+				console.log(`[ObsidianRAG] Only path changed, updating database record`);
 				await this.supabaseService.updateFilePath(oldPath, file.path);
-				console.log(`[MindMatrix] File path updated from ${oldPath} to ${file.path}`);
+				console.log(`[ObsidianRAG] File path updated from ${oldPath} to ${file.path}`);
 			} else {
 				try {
 					// If content changed, first delete old chunks and wait for completion
-					console.log(`[MindMatrix] Content changed during move, deleting old chunks for file status ID: ${oldFileStatus.id}`);
+					console.log(`[ObsidianRAG] Content changed during move, deleting old chunks for file status ID: ${oldFileStatus.id}`);
 					await this.supabaseService.deleteDocumentChunks(oldFileStatus.id);
 					
 					// Then delete the old file status
-					console.log(`[MindMatrix] Purging old file status record ID: ${oldFileStatus.id}`);
+					console.log(`[ObsidianRAG] Purging old file status record ID: ${oldFileStatus.id}`);
 					await this.supabaseService.purgeFileStatus(oldFileStatus.id);
 					
 					// Finally reprocess the file
-					console.log(`[MindMatrix] Reprocessing file at new location: ${file.path}`);
+					console.log(`[ObsidianRAG] Reprocessing file at new location: ${file.path}`);
 					await this.processFile(file);
 				} catch (error) {
-					console.error(`[MindMatrix] Error reprocessing file ${file.path}:`, error);
+					console.error(`[ObsidianRAG] Error reprocessing file ${file.path}:`, error);
 					throw error;
 				}
 			}
 		} catch (error) {
-			console.error(`[MindMatrix] Error processing file ${file.path}:`, error);
+			console.error(`[ObsidianRAG] Error processing file ${file.path}:`, error);
 			this.errorHandler.handleError(error, {
 				context: 'FileTracker.handleRename',
 				metadata: { filePath: file.path, oldPath }
@@ -399,7 +402,7 @@ export class FileTracker {
 
 	async processFile(file: TFile): Promise<void> {
 		if (!this.supabaseService || !this.settings) {
-			console.warn('[MindMatrix] SupabaseService or settings not initialized');
+			console.warn('[ObsidianRAG] SupabaseService or settings not initialized');
 			return;
 		}
 
@@ -415,9 +418,9 @@ export class FileTracker {
 				metadata.lastModified,
 				fileHash,
 				'vectorized',
-				metadata.tags || [],
-				(metadata.customMetadata?.aliases as string[]) || [],
-				metadata.links || []
+                                metadata.tags || [],
+                                metadata.aliases || [],
+                                metadata.links || []
 			);
 
 			if (!fileStatus) {
@@ -431,9 +434,9 @@ export class FileTracker {
 			const chunks = await this.createDocumentChunks(file);
 			await this.supabaseService.createDocumentChunks(fileStatus.id, chunks);
 
-			console.log(`[MindMatrix] Successfully processed file: ${file.path}`);
+			console.log(`[ObsidianRAG] Successfully processed file: ${file.path}`);
 		} catch (error) {
-			console.error(`[MindMatrix] Error processing file ${file.path}:`, error);
+			console.error(`[ObsidianRAG] Error processing file ${file.path}:`, error);
 			this.errorHandler.handleError(error, {
 				context: 'FileTracker.processFile',
 				metadata: { filePath: file.path }
@@ -487,7 +490,7 @@ export class FileTracker {
 
 			return chunks;
 		} catch (error) {
-			console.error(`[MindMatrix] Error creating chunks for ${file.path}:`, error);
+			console.error(`[ObsidianRAG] Error creating chunks for ${file.path}:`, error);
 			throw error;
 		}
 	}
@@ -540,7 +543,7 @@ export class FileTracker {
 		if (this.isProcessing || this.eventQueue.length === 0) return;
 
 		this.isProcessing = true;
-		console.log(`[MindMatrix] Processing ${this.eventQueue.length} queued events`);
+		console.log(`[ObsidianRAG] Processing ${this.eventQueue.length} queued events`);
 
 		try {
 			// Group events by file path for intelligent processing
@@ -594,7 +597,7 @@ export class FileTracker {
 			this.eventQueue = [];
 
 		} catch (error) {
-			console.error(`[MindMatrix] Error processing event queue:`, error);
+			console.error(`[ObsidianRAG] Error processing event queue:`, error);
 			this.errorHandler.handleError(error, { context: 'FileTracker.processEventQueue' });
 		} finally {
 			this.isProcessing = false;
@@ -611,7 +614,7 @@ export class FileTracker {
 	 */
 	private async processFileEvents(path: string, events: FileEvent[]): Promise<void> {
 		if (!this.settings?.vaultId || !this.supabaseService) {
-			console.warn('[MindMatrix] Settings or SupabaseService not initialized. Skipping file change processing.');
+			console.warn('[ObsidianRAG] Settings or SupabaseService not initialized. Skipping file change processing.');
 			return;
 		}
 
@@ -629,7 +632,7 @@ export class FileTracker {
 				const isExcluded = await this.supabaseService.isFileExcluded(path, exclusions);
 
 				if (isExcluded) {
-					console.log(`[MindMatrix] File moved to excluded location: ${path}`);
+					console.log(`[ObsidianRAG] File moved to excluded location: ${path}`);
 					// Queue a delete task for the old path
 					await this.queueEvent({
 						type: 'delete',
@@ -644,13 +647,13 @@ export class FileTracker {
 				// Check if the file already exists in the new location
 				const existingStatus = await this.supabaseService.getFileVectorizationStatus(path);
 				if (existingStatus && existingStatus.isVectorized) {
-					console.log(`[MindMatrix] File already exists in new location: ${path}`);
+					console.log(`[ObsidianRAG] File already exists in new location: ${path}`);
 					return;
 				}
 
 				// Update the file path in the database
 				await this.supabaseService.updateFilePath(finalEvent.oldPath, path);
-				console.log(`[MindMatrix] File path updated from ${finalEvent.oldPath} to ${path}`);
+				console.log(`[ObsidianRAG] File path updated from ${finalEvent.oldPath} to ${path}`);
 
 				// No need to update status since only the path changed, not the content
 				return;
@@ -683,18 +686,19 @@ export class FileTracker {
 				lastProcessed: Date.now()
 			});
 
-			if (needsVectorizing) {
-				console.log(`Updating status for ${path} with hash ${newHash.substring(0, 8)}...`);
-				const metadata = await this.createFileMetadata(file);
-				if (metadata.customMetadata) {
-					metadata.customMetadata.contentHash = newHash;
-				}
-				await this.supabaseService.updateFileVectorizationStatus(metadata);
-			}
-		} catch (error) {
-			console.error(`[MindMatrix] Error processing file events for ${path}:`, error);
-		}
-	}
+                        if (needsVectorizing) {
+                                console.log(`Updating status for ${path} with hash ${newHash.substring(0, 8)}...`);
+                                const metadata = await this.createFileMetadata(file);
+                                if (metadata.customMetadata) {
+                                        metadata.customMetadata.contentHash = newHash;
+                                }
+                                // Mark the file as pending so downstream processors know to re-vectorize it
+                                await this.supabaseService.updateFileVectorizationStatus(metadata, 'pending');
+                        }
+                } catch (error) {
+                        console.error(`[ObsidianRAG] Error processing file events for ${path}:`, error);
+                }
+        }
 
 	private async calculateFileHash(file: TFile): Promise<string> {
 		try {
@@ -777,13 +781,13 @@ export class FileTracker {
 		) || false;
 
 		if (isExcludedFolder) {
-			console.log(`[MindMatrix] Skipping file in excluded folder: ${filePath}`);
+			console.log(`[ObsidianRAG] Skipping file in excluded folder: ${filePath}`);
 			return false;
 		}
 
 		// Check if file type is excluded
 		if (this.settings?.exclusions.excludedFileTypes.includes(fileType)) {
-			console.log(`[MindMatrix] Skipping excluded file type: ${fileType}`);
+			console.log(`[ObsidianRAG] Skipping excluded file type: ${fileType}`);
 			return false;
 		}
 
@@ -792,13 +796,13 @@ export class FileTracker {
 		if (this.settings?.exclusions.excludedFilePrefixes.some((prefix: string) => 
 			fileName.startsWith(prefix)
 		)) {
-			console.log(`[MindMatrix] Skipping file with excluded prefix: ${fileName}`);
+			console.log(`[ObsidianRAG] Skipping file with excluded prefix: ${fileName}`);
 			return false;
 		}
 
 		// Check if file is in the specific excluded files list
 		if (this.settings?.exclusions.excludedFiles.includes(filePath)) {
-			console.log(`[MindMatrix] Skipping specifically excluded file: ${filePath}`);
+			console.log(`[ObsidianRAG] Skipping specifically excluded file: ${filePath}`);
 			return false;
 		}
 
@@ -895,7 +899,7 @@ export class FileTracker {
 	private async handleFileMove(oldPath: string, newPath: string): Promise<void> {
 		// Check if we have the minimum required services
 		if (!this.settings?.vaultId) {
-			console.warn('[MindMatrix] Settings not properly initialized. Skipping file move handling.');
+			console.warn('[ObsidianRAG] Settings not properly initialized. Skipping file move handling.');
 			return;
 		}
 
@@ -907,7 +911,7 @@ export class FileTracker {
 				: false;
 
 			if (isExcluded) {
-				console.log(`[MindMatrix] File moved to excluded location: ${newPath}`);
+				console.log(`[ObsidianRAG] File moved to excluded location: ${newPath}`);
 				if (this.supabaseService) {
 					// Remove the file from the database
 					await this.supabaseService.removeExcludedFiles(this.settings.vaultId, exclusions);
@@ -918,19 +922,19 @@ export class FileTracker {
 			// Update the file path in the database if SupabaseService is available
 			if (this.supabaseService) {
 				await this.supabaseService.updateFilePath(oldPath, newPath);
-				console.log(`[MindMatrix] File path updated from ${oldPath} to ${newPath}`);
+				console.log(`[ObsidianRAG] File path updated from ${oldPath} to ${newPath}`);
 			} else {
-				console.log(`[MindMatrix] SupabaseService not available. File move recorded: ${oldPath} -> ${newPath}`);
+				console.log(`[ObsidianRAG] SupabaseService not available. File move recorded: ${oldPath} -> ${newPath}`);
 			}
 		} catch (error) {
-			console.error(`[MindMatrix] Error handling file move from ${oldPath} to ${newPath}:`, error);
+			console.error(`[ObsidianRAG] Error handling file move from ${oldPath} to ${newPath}:`, error);
 		}
 	}
 
 	private async onFileChange(event: FileEvent): Promise<void> {
 		// Check if we have the minimum required settings
 		if (!this.settings?.vaultId) {
-			console.warn('[MindMatrix] Settings not properly initialized. Skipping file change handling.');
+			console.warn('[ObsidianRAG] Settings not properly initialized. Skipping file change handling.');
 			return;
 		}
 
@@ -938,7 +942,7 @@ export class FileTracker {
 			// Queue all events, including renames
 			await this.queueEvent(event);
 		} catch (error) {
-			console.error(`[MindMatrix] Error handling file change for ${event.path || 'unknown'}:`, error);
+			console.error(`[ObsidianRAG] Error handling file change for ${event.path || 'unknown'}:`, error);
 		}
 	}
 
@@ -967,7 +971,7 @@ export class FileTracker {
 
 	private async processFileChange(event: FileEvent): Promise<void> {
 		if (!this.settings?.vaultId || !this.supabaseService) {
-			console.warn('[MindMatrix] Settings or SupabaseService not initialized. Skipping file change processing.');
+			console.warn('[ObsidianRAG] Settings or SupabaseService not initialized. Skipping file change processing.');
 			return;
 		}
 
@@ -978,7 +982,7 @@ export class FileTracker {
 				const isExcluded = await this.supabaseService.isFileExcluded(event.path, exclusions);
 
 				if (isExcluded) {
-					console.log(`[MindMatrix] File moved to excluded location: ${event.path}`);
+					console.log(`[ObsidianRAG] File moved to excluded location: ${event.path}`);
 					// Queue a delete task for the old path
 					await this.queueEvent({
 						type: 'delete',
@@ -993,16 +997,16 @@ export class FileTracker {
 				// Check if the file already exists in the new location
 				const existingStatus = await this.supabaseService.getFileVectorizationStatus(event.path);
 				if (existingStatus && existingStatus.isVectorized) {
-					console.log(`[MindMatrix] File already exists in new location: ${event.path}`);
+					console.log(`[ObsidianRAG] File already exists in new location: ${event.path}`);
 					return;
 				}
 
 				// Update the file path in the database
 				await this.supabaseService.updateFilePath(event.oldPath, event.path);
-				console.log(`[MindMatrix] File path updated from ${event.oldPath} to ${event.path}`);
+				console.log(`[ObsidianRAG] File path updated from ${event.oldPath} to ${event.path}`);
 			}
 		} catch (error) {
-			console.error(`[MindMatrix] Error processing file change for ${event.path || 'unknown'}:`, error);
+			console.error(`[ObsidianRAG] Error processing file change for ${event.path || 'unknown'}:`, error);
 		}
 	}
 

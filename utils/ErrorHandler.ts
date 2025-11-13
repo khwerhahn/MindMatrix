@@ -14,11 +14,14 @@ export interface ErrorContext {
 }
 
 export interface ErrorLog {
-	timestamp: number;
-	error: Error;
-	context: ErrorContext;
-	level: 'error' | 'warn' | 'info' | 'debug';
-	handled: boolean;
+        timestamp: number;
+        error: Error;
+        context: ErrorContext;
+        level: 'error' | 'warn' | 'info' | 'debug';
+        handled: boolean;
+        category: ErrorCategory;
+        friendlyMessage: string;
+        diagnostics: Record<string, any>;
 }
 
 export interface SupabaseError extends Error {
@@ -28,11 +31,20 @@ export interface SupabaseError extends Error {
 }
 
 export interface SyncError extends Error {
-	type: SyncErrorType;
-	details?: Record<string, any>;
-	deviceId?: string;
-	recoverable: boolean;
+        type: SyncErrorType;
+        details?: Record<string, any>;
+        deviceId?: string;
+        recoverable: boolean;
 }
+
+export type ErrorCategory =
+        | 'network'
+        | 'database'
+        | 'sync'
+        | 'task'
+        | 'validation'
+        | 'filesystem'
+        | 'unknown';
 
 export class ErrorHandler {
 	private errorLogs: ErrorLog[] = [];
@@ -43,47 +55,51 @@ export class ErrorHandler {
 	constructor(settings: DebugSettings, vaultPath?: string) {
 		this.settings = settings;
 		if (settings.logToFile && vaultPath) {
-			this.logFilePath = `${vaultPath}/.obsidian/mind-matrix.log`;
+			this.logFilePath = `${vaultPath}/.obsidian/obsidian-rag.log`;
 		}
 	}
 
 	/**
 	 * Handles errors with context and optional recovery.
 	 */
-	handleError(error: any, context: ErrorContext, level: 'error' | 'warn' | 'info' | 'debug' = 'error'): void {
-		if (!this.shouldLog(level)) {
-			return;
-		}
-		const errorLog: ErrorLog = {
-			timestamp: Date.now(),
-			error: this.normalizeError(error),
-			context,
-			level,
-			handled: false
-		};
-		this.errorLogs.unshift(errorLog);
-		if (this.errorLogs.length > this.maxLogs) {
-			this.errorLogs.pop();
-		}
-		// Show a notice for important errors.
-		if (level === 'error' || (level === 'warn' && this.settings.logLevel === 'debug')) {
-			new Notice(`Error: ${error.message}`);
-		}
-		// Debug logging.
-		if (this.settings.enableDebugLogs) {
-			console.group(`[${level.toUpperCase()}] ${context.context}`);
-			console.error('Error details:', error);
-			console.error('Context:', context);
-			if (error.stack) {
-				console.error('Stack trace:', error.stack);
-			}
-			console.groupEnd();
-		}
-		// File logging if enabled.
-		if (this.settings.logToFile && this.logFilePath) {
-			this.writeToLogFile(errorLog);
-		}
-	}
+        handleError(error: any, context: ErrorContext, level: 'error' | 'warn' | 'info' | 'debug' = 'error'): void {
+                if (!this.shouldLog(level)) {
+                        return;
+                }
+                const normalizedError = this.normalizeError(error);
+                const category = this.categorizeError(normalizedError, context);
+                const friendlyMessage = this.buildFriendlyMessage(category, normalizedError, context);
+                const diagnostics = this.buildDiagnostics(normalizedError, context);
+                const errorLog: ErrorLog = {
+                        timestamp: Date.now(),
+                        error: normalizedError,
+                        context,
+                        level,
+                        handled: false,
+                        category,
+                        friendlyMessage,
+                        diagnostics
+                };
+                this.errorLogs.unshift(errorLog);
+                if (this.errorLogs.length > this.maxLogs) {
+                        this.errorLogs.pop();
+                }
+                if (level === 'error' || (level === 'warn' && this.settings.logLevel === 'debug')) {
+                        this.showErrorNotification(errorLog);
+                }
+                if (this.settings.enableDebugLogs) {
+                        console.group(`[${level.toUpperCase()}][${category.toUpperCase()}] ${context.context}`);
+                        console.error('Friendly message:', friendlyMessage);
+                        console.error('Error details:', normalizedError);
+                        console.error('Context:', context);
+                        console.error('Diagnostics:', diagnostics);
+                        console.groupEnd();
+                }
+                if (this.settings.logToFile && this.logFilePath) {
+                        this.writeToLogFile(errorLog);
+                }
+                void this.autoCopyErrorDetails(errorLog);
+        }
 
 	/**
 	 * Creates and handles a sync error.
@@ -185,11 +201,12 @@ export class ErrorHandler {
 	/**
 	 * Shows an appropriate notification based on error type.
 	 */
-	private showErrorNotification(error: any): void {
-		let message = 'An error occurred';
-		let duration = 4000;
-		if (this.isSyncError(error)) {
-			switch(error.type) {
+        private showErrorNotification(errorLog: ErrorLog): void {
+                let message = errorLog.friendlyMessage || 'An error occurred';
+                let duration = 4000;
+                const error = errorLog.error;
+                if (this.isSyncError(error)) {
+                        switch(error.type) {
 				case SyncErrorType.SYNC_FILE_MISSING:
 					message = 'Sync file is missing. Will attempt to recreate.';
 					break;
@@ -212,8 +229,8 @@ export class ErrorHandler {
 				default:
 					message = `Sync error: ${error.message}`;
 			}
-		} else if (this.isSupabaseError(error)) {
-			switch (error.code) {
+                } else if (this.isSupabaseError(error)) {
+                        switch (error.code) {
 				case '42P01':
 					message = 'Database table not found. Please run setup SQL.';
 					break;
@@ -227,54 +244,57 @@ export class ErrorHandler {
 					message = `Database error: ${error.message}`;
 			}
 			duration = 6000;
-		} else if (error.type === DocumentProcessingError.CHUNKING_ERROR) {
-			message = 'Error splitting document into chunks';
-		} else if (error.type === DocumentProcessingError.EMBEDDING_ERROR) {
-			message = 'Error generating embeddings';
-		} else if (error.type === DocumentProcessingError.DATABASE_ERROR) {
-			message = 'Database operation failed';
-		} else if (error.type === DocumentProcessingError.INVALID_METADATA) {
-			message = 'Invalid document metadata';
-		} else if (error.type === DocumentProcessingError.FILE_ACCESS_ERROR) {
-			message = 'Error accessing file';
-		} else if (error.type === DocumentProcessingError.YAML_PARSE_ERROR) {
-			message = 'Error parsing YAML front matter';
-		} else if (error.type === DocumentProcessingError.VECTOR_EXTENSION_ERROR) {
-			message = 'Vector extension not available';
-		} else if (error.type === DocumentProcessingError.SYNC_ERROR) {
-			message = 'Sync operation failed';
-		} else if (error.type === TaskProcessingError.QUEUE_FULL) {
-			message = 'Task queue is full';
-		} else if (error.type === TaskProcessingError.TASK_TIMEOUT) {
-			message = 'Task timed out';
-		} else if (error.type === TaskProcessingError.TASK_CANCELLED) {
-			message = 'Task was cancelled';
-		} else if (error.type === TaskProcessingError.MAX_RETRIES_EXCEEDED) {
-			message = 'Maximum retry attempts exceeded';
-		} else if (error.type === TaskProcessingError.INVALID_TASK_STATE) {
-			message = 'Invalid task state';
-		} else if (error.type === TaskProcessingError.TASK_NOT_FOUND) {
-			message = 'Task not found';
-		}
-		if (error.message && !this.isSyncError(error)) {
-			message = `${message}: ${error.message}`;
-		}
-		new Notice(message, duration);
-	}
+                } else if ((error as any).type === DocumentProcessingError.CHUNKING_ERROR) {
+                        message = 'Error splitting document into chunks';
+                } else if ((error as any).type === DocumentProcessingError.EMBEDDING_ERROR) {
+                        message = 'Error generating embeddings';
+                } else if ((error as any).type === DocumentProcessingError.DATABASE_ERROR) {
+                        message = 'Database operation failed';
+                } else if ((error as any).type === DocumentProcessingError.INVALID_METADATA) {
+                        message = 'Invalid document metadata';
+                } else if ((error as any).type === DocumentProcessingError.FILE_ACCESS_ERROR) {
+                        message = 'Error accessing file';
+                } else if ((error as any).type === DocumentProcessingError.YAML_PARSE_ERROR) {
+                        message = 'Error parsing YAML front matter';
+                } else if ((error as any).type === DocumentProcessingError.VECTOR_EXTENSION_ERROR) {
+                        message = 'Vector extension not available';
+                } else if ((error as any).type === DocumentProcessingError.SYNC_ERROR) {
+                        message = 'Sync operation failed';
+                } else if ((error as any).type === TaskProcessingError.QUEUE_FULL) {
+                        message = 'Task queue is full';
+                } else if ((error as any).type === TaskProcessingError.TASK_TIMEOUT) {
+                        message = 'Task timed out';
+                } else if ((error as any).type === TaskProcessingError.TASK_CANCELLED) {
+                        message = 'Task was cancelled';
+                } else if ((error as any).type === TaskProcessingError.MAX_RETRIES_EXCEEDED) {
+                        message = 'Maximum retry attempts exceeded';
+                } else if ((error as any).type === TaskProcessingError.INVALID_TASK_STATE) {
+                        message = 'Invalid task state';
+                } else if ((error as any).type === TaskProcessingError.TASK_NOT_FOUND) {
+                        message = 'Task not found';
+                }
+                if (error.message && !this.isSyncError(error) && !message.includes(error.message)) {
+                        message = `${message} (Details: ${error.message})`;
+                }
+                const clipboardHint = this.supportsClipboard() ? ' | Details copied to clipboard.' : '';
+                new Notice(`${message}${clipboardHint}`, duration);
+        }
 
 	/**
 	 * Writes error log to file.
 	 */
 	private writeToLogFile(log: ErrorLog): void {
 		if (!this.logFilePath) return;
-		const logEntry = {
-			timestamp: new Date(log.timestamp).toISOString(),
-			level: log.level.toUpperCase(),
-			context: log.context.context,
-			error: log.error.message,
-			stack: log.error.stack,
-			metadata: log.context.metadata
-		};
+                const logEntry = {
+                        timestamp: new Date(log.timestamp).toISOString(),
+                        level: log.level.toUpperCase(),
+                        context: log.context.context,
+                        error: log.error.message,
+                        stack: log.error.stack,
+                        metadata: log.context.metadata,
+                        category: log.category,
+                        diagnostics: log.diagnostics
+                };
 		try {
 			if ((window as any).app?.vault?.adapter?.append) {
 				(window as any).app.vault.adapter.append(
@@ -307,16 +327,114 @@ export class ErrorHandler {
 		}, {} as Record<string, number>);
 	}
 
-	getSyncErrorStats(): Record<SyncErrorType, number> {
-		const stats = {} as Record<SyncErrorType, number>;
-		Object.values(SyncErrorType).forEach(type => {
-			stats[type as SyncErrorType] = 0;
-		});
-		this.errorLogs.forEach(log => {
-			if (this.isSyncError(log.error)) {
-				stats[log.error.type] = (stats[log.error.type] || 0) + 1;
-			}
-		});
-		return stats;
-	}
+        getSyncErrorStats(): Record<SyncErrorType, number> {
+                const stats = {} as Record<SyncErrorType, number>;
+                Object.values(SyncErrorType).forEach(type => {
+                        stats[type as SyncErrorType] = 0;
+                });
+                this.errorLogs.forEach(log => {
+                        if (this.isSyncError(log.error)) {
+                                stats[log.error.type] = (stats[log.error.type] || 0) + 1;
+                        }
+                });
+                return stats;
+        }
+
+        private categorizeError(error: Error, context: ErrorContext): ErrorCategory {
+                if (this.isSyncError(error)) {
+                        return 'sync';
+                }
+                if (this.isSupabaseError(error) || /database/i.test(error.message || '')) {
+                        return 'database';
+                }
+                if (/network|fetch|timeout/i.test(error.message || '')) {
+                        return 'network';
+                }
+                if (context.taskType || Object.values(TaskProcessingError).includes((error as any).type)) {
+                        return 'task';
+                }
+                if ((error as any).type && Object.values(DocumentProcessingError).includes((error as any).type)) {
+                        return 'validation';
+                }
+                if (/file|path|permission/i.test(error.message || '')) {
+                        return 'filesystem';
+                }
+                return 'unknown';
+        }
+
+        private buildFriendlyMessage(category: ErrorCategory, error: Error, context: ErrorContext): string {
+                const base = error.message || 'An unexpected error occurred';
+                const location = context.context ? ` (${context.context})` : '';
+                switch (category) {
+                        case 'network':
+                                return `Network issue detected${location}. We'll retry shortly. Details: ${base}`;
+                        case 'database':
+                                return `Database request failed${location}. Please verify Supabase connectivity. Details: ${base}`;
+                        case 'sync':
+                                return `Sync operation encountered a problem${location}. ${base}`;
+                        case 'task':
+                                return `Queue task error${location}. ${base}`;
+                        case 'validation':
+                                return `Content validation failed${location}. ${base}`;
+                        case 'filesystem':
+                                return `File system error${location}. ${base}`;
+                        default:
+                                return `Unexpected error${location}. ${base}`;
+                }
+        }
+
+        private buildDiagnostics(error: Error, context: ErrorContext): Record<string, any> {
+                return {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack,
+                        context,
+                        timestamp: new Date().toISOString()
+                };
+        }
+
+        private supportsClipboard(): boolean {
+                return typeof navigator !== 'undefined' && !!navigator.clipboard;
+        }
+
+        private async autoCopyErrorDetails(log: ErrorLog): Promise<void> {
+                if (!this.supportsClipboard()) {
+                        return;
+                }
+                try {
+                        await navigator.clipboard.writeText(this.formatLogForClipboard(log));
+                } catch (copyError) {
+                        console.warn('Failed to copy error details to clipboard:', copyError);
+                }
+        }
+
+        public async copyErrorLogToClipboard(index: number = 0): Promise<boolean> {
+                if (!this.supportsClipboard()) {
+                        return false;
+                }
+                const log = this.errorLogs[index];
+                if (!log) {
+                        return false;
+                }
+                try {
+                        await navigator.clipboard.writeText(this.formatLogForClipboard(log));
+                        return true;
+                } catch (error) {
+                        console.warn('Manual copy of error log failed:', error);
+                        return false;
+                }
+        }
+
+        private formatLogForClipboard(log: ErrorLog): string {
+                const segments = [
+                        `Timestamp: ${new Date(log.timestamp).toISOString()}`,
+                        `Level: ${log.level}`,
+                        `Category: ${log.category}`,
+                        `Context: ${log.context.context}`,
+                        `Message: ${log.error.message}`,
+                        `Stack: ${log.error.stack || 'N/A'}`,
+                        `Metadata: ${JSON.stringify(log.context.metadata || {}, null, 2)}`
+                ];
+                return segments.join('\n');
+        }
 }

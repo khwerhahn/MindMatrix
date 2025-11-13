@@ -1,14 +1,14 @@
 //SettingsTab.ts
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
-import MindMatrixPlugin from '../main';
-import { MindMatrixSettings, generateVaultId, isVaultInitialized, getUserExclusions, SYSTEM_EXCLUSIONS } from './Settings';
+import ObsidianRAGPlugin from '../main';
+import { ObsidianRAGSettings, generateVaultId, isVaultInitialized, getUserExclusions, SYSTEM_EXCLUSIONS } from './Settings';
 import { SupabaseService } from '../services/SupabaseService';
 
-export class MindMatrixSettingsTab extends PluginSettingTab {
-	plugin: MindMatrixPlugin;
-	settings: MindMatrixSettings;
+export class ObsidianRAGSettingsTab extends PluginSettingTab {
+	plugin: ObsidianRAGPlugin;
+	settings: ObsidianRAGSettings;
 
-	constructor(app: App, plugin: MindMatrixPlugin) {
+	constructor(app: App, plugin: ObsidianRAGPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 		this.settings = plugin.settings;
@@ -91,33 +91,216 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 						new Notice('Supabase URL updated.');
 					})
 			);
-		new Setting(containerEl)
-			.setName('Supabase API Key')
-			.setDesc('Your Supabase API key (found in your Supabase dashboard).')
-			.addText(text =>
-				text.setPlaceholder('Enter your API key')
-					.setValue(this.settings.supabase.apiKey)
-					.onChange(async (value) => {
-						this.settings.supabase.apiKey = value;
-						await this.plugin.saveSettings();
-						new Notice('Supabase API key updated.');
-					})
-			);
+                new Setting(containerEl)
+                        .setName('Supabase API Key')
+                        .setDesc('Your Supabase API key (found in your Supabase dashboard).')
+                        .addText(text =>
+                                text.setPlaceholder('Enter your API key')
+                                        .setValue(this.settings.supabase.apiKey)
+                                        .onChange(async (value) => {
+                                                this.settings.supabase.apiKey = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice('Supabase API key updated.');
+                                        })
+                        );
 
-		// OpenAI Settings Section
-		containerEl.createEl('h2', { text: 'OpenAI Configuration' });
-		new Setting(containerEl)
-			.setName('OpenAI API Key')
-			.setDesc('Your OpenAI API key for generating embeddings.')
-			.addText(text =>
-				text.setPlaceholder('Enter your API key')
-					.setValue(this.settings.openai.apiKey)
-					.onChange(async (value) => {
-						this.settings.openai.apiKey = value;
-						await this.plugin.saveSettings();
-						new Notice('OpenAI API key updated.');
-					})
-			);
+                // Sync Mode Section
+                containerEl.createEl('h2', { text: 'Sync Mode' });
+const hybridSettingsContainer = containerEl.createDiv('obsidian-rag-hybrid-settings');
+
+new Setting(containerEl)
+.setName('Data Sync Mode')
+.setDesc('Choose which backend should be updated during sync operations.')
+.addDropdown(dropdown =>
+dropdown
+.addOption('supabase', 'Supabase (Vector)')
+.addOption('neo4j', 'Neo4j (Graph)')
+.addOption('hybrid', 'Hybrid (Both)')
+.setValue(this.settings.sync.mode || 'supabase')
+.onChange(async value => {
+this.settings.sync.mode = value as 'supabase' | 'neo4j' | 'hybrid';
+await this.plugin.saveSettings();
+new Notice('Sync mode updated.');
+this.updateHybridSettingsVisibility(hybridSettingsContainer);
+})
+);
+
+new Setting(hybridSettingsContainer)
+.setName('Hybrid execution strategy')
+.setDesc('Control the order in which vector and graph updates run when hybrid mode is enabled.')
+.addDropdown(dropdown =>
+dropdown
+.addOption('vector-first', 'Vectors first')
+.addOption('graph-first', 'Graph first')
+.addOption('parallel', 'Run in parallel')
+.setValue(this.settings.sync.hybridStrategy.executionOrder)
+.onChange(async value => {
+this.settings.sync.hybridStrategy.executionOrder = value as 'vector-first' | 'graph-first' | 'parallel';
+await this.plugin.saveSettings();
+new Notice('Hybrid execution strategy updated.');
+})
+);
+
+new Setting(hybridSettingsContainer)
+.setName('Require dual writes in hybrid mode')
+.setDesc('When enabled, syncs will fail if either the vector store or graph database could not be updated.')
+.addToggle(toggle =>
+toggle
+.setValue(this.settings.sync.hybridStrategy.requireDualWrites)
+.onChange(async value => {
+this.settings.sync.hybridStrategy.requireDualWrites = value;
+await this.plugin.saveSettings();
+new Notice('Hybrid enforcement preference updated.');
+})
+);
+
+this.updateHybridSettingsVisibility(hybridSettingsContainer);
+
+                // Neo4j Settings Section
+                containerEl.createEl('h2', { text: 'Neo4j Configuration' });
+                new Setting(containerEl)
+                        .setName('Neo4j URL')
+                        .setDesc('Bolt URL to your Neo4j instance (e.g., bolt://localhost:7687).')
+                        .addText(text =>
+                                text.setPlaceholder('bolt://localhost:7687')
+                                        .setValue(this.settings.neo4j.url)
+                                        .onChange(async value => {
+                                                this.settings.neo4j.url = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice('Neo4j URL updated.');
+                                        })
+                        );
+                new Setting(containerEl)
+                        .setName('Neo4j Username')
+                        .setDesc('Database username used for authentication.')
+                        .addText(text =>
+                                text.setPlaceholder('neo4j')
+                                        .setValue(this.settings.neo4j.username)
+                                        .onChange(async value => {
+                                                this.settings.neo4j.username = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice('Neo4j username updated.');
+                                        })
+                        );
+                new Setting(containerEl)
+                        .setName('Neo4j Password')
+                        .setDesc('Password for the provided user account.')
+                        .addText(text => {
+                                const control = text
+                                        .setPlaceholder('password')
+                                        .setValue(this.settings.neo4j.password)
+                                        .onChange(async value => {
+                                                this.settings.neo4j.password = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice('Neo4j password updated.');
+                                        });
+                                control.inputEl.type = 'password';
+                                return control;
+                        });
+                new Setting(containerEl)
+                        .setName('Neo4j Database')
+                        .setDesc('Target database name inside your Neo4j instance.')
+                        .addText(text =>
+                                text.setPlaceholder('neo4j')
+                                        .setValue(this.settings.neo4j.database)
+                                        .onChange(async value => {
+                                                this.settings.neo4j.database = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice('Neo4j database updated.');
+                                        })
+                        );
+                new Setting(containerEl)
+                        .setName('Project Name')
+                        .setDesc('Used to namespace documents inside the graph so multiple vaults can share a database.')
+                        .addText(text =>
+                                text.setPlaceholder('obsidian-rag')
+                                        .setValue(this.settings.neo4j.projectName)
+                                        .onChange(async value => {
+                                                this.settings.neo4j.projectName = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice('Neo4j project name updated.');
+                                        })
+                        );
+
+                // Embedding Provider Settings Section
+                containerEl.createEl('h2', { text: 'Embeddings' });
+
+                new Setting(containerEl)
+                        .setName('Use Ollama')
+                        .setDesc('Prefer a local Ollama server for embeddings before falling back to OpenAI.')
+                        .addToggle(toggle =>
+                                toggle
+                                        .setValue(this.settings.embeddings.ollama.enabled)
+                                        .onChange(async (value) => {
+                                                this.settings.embeddings.ollama.enabled = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice(`Ollama embeddings ${value ? 'enabled' : 'disabled'}.`);
+                                                this.display();
+                                        })
+                        );
+
+                new Setting(containerEl)
+                        .setName('Ollama URL')
+                        .setDesc('Base URL for your Ollama server (e.g., http://localhost:11434).')
+                        .addText(text => {
+                                const control = text
+                                        .setPlaceholder('http://localhost:11434')
+                                        .setValue(this.settings.embeddings.ollama.url)
+                                        .onChange(async (value) => {
+                                                this.settings.embeddings.ollama.url = value.trim();
+                                                await this.plugin.saveSettings();
+                                                new Notice('Ollama URL updated.');
+                                        });
+                                control.setDisabled(!this.settings.embeddings.ollama.enabled);
+                                return control;
+                        });
+
+                new Setting(containerEl)
+                        .setName('Ollama Model')
+                        .setDesc('Model to request from Ollama (defaults to nomic-embed-text).')
+                        .addText(text => {
+                                const control = text
+                                        .setPlaceholder('nomic-embed-text')
+                                        .setValue(this.settings.embeddings.ollama.model)
+                                        .onChange(async (value) => {
+                                                this.settings.embeddings.ollama.model = value.trim();
+                                                await this.plugin.saveSettings();
+                                                new Notice('Ollama model updated.');
+                                        });
+                                control.setDisabled(!this.settings.embeddings.ollama.enabled);
+                                return control;
+                        });
+
+                new Setting(containerEl)
+                        .setName('Fallback to OpenAI')
+                        .setDesc('If enabled, OpenAI will be used when Ollama is unavailable or fails.')
+                        .addToggle(toggle =>
+                                toggle
+                                        .setValue(this.settings.embeddings.ollama.fallbackToOpenAI)
+                                        .onChange(async (value) => {
+                                                this.settings.embeddings.ollama.fallbackToOpenAI = value;
+                                                await this.plugin.saveSettings();
+                                                new Notice(`OpenAI fallback ${value ? 'enabled' : 'disabled'}.`);
+                                        })
+                        );
+
+                new Setting(containerEl)
+                        .setName('OpenAI API Key')
+                        .setDesc('Used when falling back to OpenAI for embeddings.')
+                        .addText(text =>
+                                text.setPlaceholder('Enter your API key')
+                                        .setValue(this.settings.embeddings.openai.apiKey)
+                                        .onChange(async (value) => {
+                                                this.settings.embeddings.openai.apiKey = value;
+                                                if (this.settings.openai) {
+                                                        this.settings.openai.apiKey = value;
+                                                } else {
+                                                        this.settings.openai = { ...this.settings.embeddings.openai };
+                                                }
+                                                await this.plugin.saveSettings();
+                                                new Notice('OpenAI API key updated.');
+                                        })
+                        );
 
 		// Document Processing Settings Section
 		containerEl.createEl('h2', { text: 'Document Processing' });
@@ -297,8 +480,8 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 						// Also update the system excluded files
 						const systemFiles = this.settings.exclusions.systemExcludedFiles;
 						// Remove old sync file references
-						const oldSyncFileIndex = systemFiles.findIndex(f => f === '_mindmatrixsync.md');
-						const oldSyncBackupIndex = systemFiles.findIndex(f => f === '_mindmatrixsync.md.backup');
+						const oldSyncFileIndex = systemFiles.findIndex(f => f === '_obsidianragsync.md');
+						const oldSyncBackupIndex = systemFiles.findIndex(f => f === '_obsidianragsync.md.backup');
 						if (oldSyncFileIndex !== -1) systemFiles.splice(oldSyncFileIndex, 1);
 						if (oldSyncBackupIndex !== -1) systemFiles.splice(oldSyncBackupIndex, 1);
 						// Add new sync file references
@@ -464,4 +647,13 @@ export class MindMatrixSettingsTab extends PluginSettingTab {
 			});
 		});
 	}
+
+		private updateHybridSettingsVisibility(container: HTMLElement): void {
+			if (!container) return;
+			if (this.settings.sync.mode === 'hybrid') {
+				container.removeClass('is-hidden');
+			} else {
+				container.addClass('is-hidden');
+			}
+		}
 }

@@ -1,8 +1,8 @@
 import { SupabaseService } from '../services/SupabaseService';
-import { MindMatrixSettings } from '../settings/Settings';
+import { ObsidianRAGSettings } from '../settings/Settings';
 
 async function queryTables() {
-    const settings: MindMatrixSettings = {
+    const settings: ObsidianRAGSettings = {
         supabase: {
             url: process.env.SUPABASE_URL!,
             apiKey: process.env.SUPABASE_ANON_KEY!,
@@ -45,7 +45,7 @@ async function queryTables() {
         enableNotifications: true,
         enableProgressBar: true,
         sync: {
-            syncFilePath: '.obsidian/plugins/mindmatrix/sync.json',
+            syncFilePath: '.obsidian/plugins/obsidian-rag/sync.json',
             backupInterval: 3600000,
             checkInterval: 60000,
             checkAttempts: 3,

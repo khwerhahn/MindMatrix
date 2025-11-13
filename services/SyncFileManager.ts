@@ -31,7 +31,7 @@ export class SyncFileManager {
 	constructor(
 		private vault: Vault,
 		private errorHandler: ErrorHandler,
-		syncFilePath: string = '_mindmatrixsync.md',
+		syncFilePath: string = '_obsidianragsync.md',
 		backupInterval: number = 3600000, // 1 hour in milliseconds
 		vaultId: string,
 		deviceId: string,
@@ -197,7 +197,7 @@ export class SyncFileManager {
 		// Convert data to YAML using Obsidian's built-in function
 		const yamlContent = stringifyYaml(data);
 		// Return as markdown with YAML front matter
-		return `---\n${yamlContent}---\n\n## Mind Matrix Sync File\n\nThis file manages cross-device coordination for the Mind Matrix plugin.\nDo not modify this file manually.\n`;
+		return `---\n${yamlContent}---\n\n## Obsidian RAG Sync File\n\nThis file manages cross-device coordination for the Obsidian RAG plugin.\nDo not modify this file manually.\n`;
 	}
 
 	/**
